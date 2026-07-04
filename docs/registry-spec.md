@@ -88,7 +88,7 @@ Every read endpoint returns objects in the same envelope, wrapped with server me
 ```json
 {
   "envelope": { "payload": { ... }, "signature": "0x…" },
-  "meta": { "hash": "0x…", "receivedAt": "2026-07-04T12:00:00Z" }
+  "meta": { "hash": "0x…", "receivedAt": "2026-07-04T12:00:00.000Z" }
 }
 ```
 
@@ -100,7 +100,9 @@ Two object classes are signed by the **service key**, not a provider key: capabi
 
 ### 3.6 Replay protection
 
-Every provider payload carries `signedAt` (unix ms, provider clock) and, where the type is mutable-by-succession (dynamic terms), a monotonically increasing `seq`. The service rejects payloads with `signedAt` more than 120 s in the future, and rejects a dynamic-terms payload whose `seq` is not strictly greater than the currently stored one for that offer. Benchmark challenge/response has its own freshness rules (§5).
+Every provider payload carries `signedAt` (provider clock) and, where the type is mutable-by-succession (dynamic terms), a monotonically increasing `seq`. The service rejects payloads with `signedAt` more than 120 s in the future, and rejects a dynamic-terms payload whose `seq` is not strictly greater than the currently stored one for that offer. Benchmark challenge/response has its own freshness rules (§5).
+
+**Timestamp convention.** Every timestamp field in a signed payload, challenge, or attestation is an **ISO 8601 UTC string with millisecond precision**, e.g. `2026-06-04T08:00:00.000Z`. Comparisons ("older `signedAt`", "more than 120 s in the future", `validUntil − signedAt ≤ 3600 s`) operate on the parsed instants. The canonical (JCS) form is the string exactly as transmitted, so implementations must emit the fixed `YYYY-MM-DDThh:mm:ss.sssZ` form (UTC `Z`, always three fractional digits) to keep signatures stable.
 
 ---
 
@@ -161,8 +163,8 @@ Produced by the service at the end of a successful benchmark run (§5). It is th
   "ramGib": 64,
   "cpuModel": "AMD EPYC 9354",
   "scores": { "singleCore": 812, "quadCore": 3180, "eightCore": 6100, "full": 11800 },
-  "measuredAt": 1780560012345,   // service clock, ms
-  "expiresAt":  1783152012345,   // measuredAt + attestation TTL (default 30 days)
+  "measuredAt": "2026-06-04T08:00:12.345Z",   // service clock
+  "expiresAt":  "2026-07-04T08:00:12.345Z",   // measuredAt + attestation TTL (default 30 days)
   "attesterKey": "0x…",          // service signing address
   "specVersion": "0.2-draft"
 }
@@ -234,11 +236,11 @@ Because per-lane wall-clock must be authoritative, lanes are issued one at a tim
        { "laneId": "full",   "workers": 16 }
      ],
      "checkpoints": 1024, "samples": 24,
-     "issuedAt": 1780560000000, "deadline": 1780560300000, "attesterKey": "0x…"
+     "issuedAt": "2026-06-04T08:00:00.000Z", "deadline": "2026-06-04T08:05:00.000Z", "attesterKey": "0x…"
    }
    ```
 
-2. **Per lane, in order:** the provider calls `POST /v1/attest/{challengeId}/lane/{laneId}/start`. The service records `laneIssuedAt` (its own clock) and returns `{ ok: true }`. The provider computes the lane's chains and builds, per worker, a Merkle commitment over `C` checkpoints (checkpoint `j` = state after `j·(L/C)` steps). The provider then submits `POST /v1/attest/{challengeId}/lane/{laneId}` with a signed body carrying, per worker, the Merkle root and the final state `s_L`, plus the Fiat–Shamir openings (§5.4). The service records `laneReceivedAt`, verifies (§5.4), and computes `elapsedSeconds = (laneReceivedAt − laneIssuedAt)/1000` minus a one-way network-latency estimate from the preceding round-trip (bounded below by 0).
+2. **Per lane, in order:** the provider calls `POST /v1/attest/{challengeId}/lane/{laneId}/start`. The service records `laneIssuedAt` (its own clock) and returns `{ ok: true }`. The provider computes the lane's chains and builds, per worker, a Merkle commitment over `C` checkpoints (checkpoint `j` = state after `j·(L/C)` steps). The provider then submits `POST /v1/attest/{challengeId}/lane/{laneId}` with a signed body carrying, per worker, the Merkle root and the final state `s_L`, plus the Fiat–Shamir openings (§5.4). The service records `laneReceivedAt`, verifies (§5.4), and computes `elapsedSeconds` as the difference of the two instants `laneReceivedAt − laneIssuedAt`, minus a one-way network-latency estimate from the preceding round-trip (bounded below by 0).
 
 3. **Close.** After all four lanes verify before `deadline`, the service computes the scores, writes and signs the `CapabilityAttestation`, persists it durably, and returns it. Any lane that fails verification, misses the deadline, or exceeds the max per-lane time aborts the whole challenge with `BENCH_FAILED` (details name the lane).
 
@@ -284,7 +286,7 @@ Registered once; re-submission with newer `signedAt` supersedes.
 {
   "type": "profile/v1",
   "providerId": "0x…",
-  "signedAt": 1780560000000,
+  "signedAt": "2026-06-04T08:00:00.000Z",
   "displayName": "my-node-01",
   "netEndpoints": ["p2p://…", "relay://…"],
   "heartbeatIntervalSec": 60,
@@ -302,7 +304,7 @@ The static, rarely-changing part of an offer. Its hash is the **offer ID** and t
 {
   "type": "offer/v1",
   "providerId": "0x…",
-  "signedAt": 1780560000000,
+  "signedAt": "2026-06-04T08:00:00.000Z",
   "compute": {
     "model": "cpu/v1",
     "attestationId": "0x…",     // references a CapabilityAttestation (§4.3)
@@ -324,7 +326,7 @@ The static, rarely-changing part of an offer. Its hash is the **offer ID** and t
     }
   },
   "constraintsHint": "optional free-form",
-  "expiresAt": 1788336000000
+  "expiresAt": "2026-09-02T08:00:00.000Z"
 }
 ```
 
@@ -348,8 +350,8 @@ The frequently-changing part. Stored only in Redis (latest per offer), never in 
   "providerId": "0x…",
   "offerId": "0x…",
   "seq": 4711,
-  "signedAt": 1780560060000,
-  "validUntil": 1780560240000,
+  "signedAt": "2026-06-04T08:01:00.000Z",
+  "validUntil": "2026-06-04T08:04:00.000Z",
   "prices": {
     "perCoreSec": "0.000002",
     "perCuSec": "0.0000008",
@@ -366,7 +368,7 @@ Validation on write: signer matches the offer's provider; every price within the
 Optional explicit withdrawal (normally silence + TTL suffices):
 
 ```json
-{ "type": "revoke/v1", "providerId": "0x…", "offerId": "0x…", "signedAt": 1780560000000 }
+{ "type": "revoke/v1", "providerId": "0x…", "offerId": "0x…", "signedAt": "2026-06-04T08:00:00.000Z" }
 ```
 
 A revoked offer is permanently excluded from results; revocation is durable (Postgres).
@@ -577,7 +579,7 @@ create table payload_log (              -- append-only, every accepted durable o
 create table providers (
   provider_id  bytea primary key,
   profile_hash bytea not null references payload_log(hash),
-  signed_at    bigint not null,
+  signed_at    timestamptz not null,     -- parsed from the payload's ISO signedAt
   heartbeat_interval_sec int not null,
   first_seen_at timestamptz not null,
   updated_at    timestamptz not null
