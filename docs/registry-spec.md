@@ -448,43 +448,37 @@ Response is `{ "items": [ …offer objects… ], "nextCursor": "…" | null }`. 
 
 ### 8.5 Liveness snapshot (polling)
 
-There are no server-initiated connections. To track the live market cheaply, a client polls a single **global, unfiltered** snapshot of every currently-live offer's volatile state (offers with an unexpired DynamicTerms record):
+There are no server-initiated connections. To track the live market cheaply, a client polls a single **global, unfiltered** snapshot listing every currently-live offer (those with an unexpired DynamicTerms record) and its current price:
 
 ```
 GET /v1/liveness            → compact snapshot of all live offers
 ```
 
-Because it is unfiltered, the response is identical for every caller, so the service builds it once per short interval and serves the cached blob to everyone — a couple thousand offers is a single small response, and per-request server cost is ~0. Clients apply their own filters to it locally, or use `GET /v1/offers` (§8.4) for server-side filtering and full signed objects.
+Because it is unfiltered, the response is identical for every caller, so the service builds it once per short interval and serves the cached blob to everyone — a couple thousand offers is a single small response, and per-request server cost is ~0. Clients watch price and liveness in it, and use `GET /v1/offers` (§8.4) for hardware/score filtering and full signed objects.
 
-Format is deliberately compact — provider-grouped and columnar (no repeated JSON keys), with timestamps as unix seconds (this is an ephemeral, machine-read index, so the ISO/signing convention of §3.6 does not apply):
+Format is deliberately minimal — a flat columnar list of `[offerId, minPricePerHour]` pairs (no repeated JSON keys), with `at` as unix seconds (this is an ephemeral, machine-read index, so the ISO/signing convention of §3.6 does not apply):
 
 ```json
 {
   "at": 1780560300,          // snapshot time, unix seconds
   "ttlSec": 1,               // how long this blob is valid; poll no faster than this
-  "count": 1893,             // number of live offers below
-  "cols": ["offerId", "validUntil", "seq", "minPricePerHour", "coresFree"],
-  "providers": [
-    {
-      "id": "0x0ab…",        // providerId, stated once
-      "seen": 1780560298,    // most recent terms arrival across this provider's offers, unix seconds
-      "unit": "GLM",         // currency for the minPricePerHour column
-      "rows": [
-        ["0x9f…", 1780560540, 4711, "0.05", 12],
-        ["0x3c…", 1780560510, 88,   "0.08", 4]
-      ]
-    }
+  "unit": "GLM",             // currency for every minPricePerHour below
+  "count": 1893,             // number of live offers
+  "cols": ["offerId", "minPricePerHour"],
+  "rows": [
+    ["0x9f…", "0.05"],
+    ["0x3c…", "0.08"]
   ]
 }
 ```
 
 Semantics:
 
-- Each entry in `rows` is one live offer, positional per `cols`. `validUntil`/`seen`/`at` are unix seconds; `minPricePerHour` is a decimal string in the provider's `unit`.
-- The blob is **unsigned server-derived data** — a liveness index, like `meta` (§3.4), not authoritative. To transact, a requestor fetches the signed template + terms via `GET /v1/offers/{offerId}` (§8.3) and verifies them. Liveness tells you *what to fetch*, not *what to trust*.
-- An offer present here is live; one absent has no unexpired terms (stale) or was revoked/expired. There is no event stream — a poller diffs successive snapshots itself if it wants transitions.
-- Responses SHOULD be served with `Content-Encoding: gzip`; columnar JSON of a few thousand rows compresses to a few KB.
-- Degraded (Redis absent, §2): the live set is empty, so the snapshot returns `count: 0`.
+- Each `rows` entry is one **live** offer, positional per `cols`: its `offerId` and current `minPricePerHour` (decimal string in `unit`). Nothing else — freshness is conveyed by presence, not a field.
+- **Presence is liveness.** An offer appears iff it has an unexpired DynamicTerms record. An offer with no live terms (stale), revoked, or expired simply has **no entry** — the list is exactly the live set. A poller detects a gone offer by its absence from the next snapshot, and diffs successive snapshots itself if it wants transitions.
+- The blob is **unsigned server-derived data** — a liveness index, like `meta` (§3.4), not authoritative. To transact, a requestor fetches the signed template + terms via `GET /v1/offers/{offerId}` (§8.3) and verifies them; that fetch also yields the provider, capacity, and validity window. Liveness tells you *what to fetch*, not *what to trust*.
+- Responses SHOULD be served with `Content-Encoding: gzip`; two columns over a few thousand rows compress to a couple KB.
+- Degraded (Redis absent, §2): the live set is empty, so the snapshot returns `count: 0` and an empty `rows`.
 
 > **Deferred — later implementation.** A per-filter incremental *change feed* (`GET /v1/offers/changes?since=<cursor>`, server-side filtered, with optional long-poll) is intentionally left out of the first cut. Until it lands, polling this liveness snapshot (global, cacheable) plus `GET /v1/offers` (filtered, full objects) covers the same need. The feed is a latency/bandwidth optimization for clients tracking a narrow filter, not new capability.
 
