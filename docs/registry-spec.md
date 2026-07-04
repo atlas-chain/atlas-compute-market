@@ -257,9 +257,9 @@ Full recomputation of every chain would cost the service as much CPU as the prov
 
 Soundness: a provider that skips a fraction `f` of a chain's steps corrupts at least `f·C` segments and is caught with probability `≈ 1 − (1−f)^K`. Parameters MUST be chosen so that skipping ≥1 % of any chain is detected with probability ≥ `1 − 2⁻⁴⁰` (e.g. `C = 1024`, `K = 24` gives ample margin; these are tunable and pinned by the reference vectors, §16).
 
-### 5.5 RAM proof (optional in v0.2)
+### 5.5 RAM (declared in v0.2)
 
-`ramGib` is a declared field. The service MAY additionally issue a `mem` lane whose step mixes a `ramGib`-sized seeded buffer (memory-hard, scrypt/Argon2-style), so completing it within the deadline lower-bounds the machine's fast memory. When present, the attestation carries `ramProven: true`; otherwise `ramGib` is declared-only. Requestors can filter on `ram.proven=true` (§8.3). Full definition of the `mem` lane is deferred; the field and flag are reserved now so the schema does not change when it lands.
+`ramGib` is a declared descriptor in v0.2; the benchmark proves CPU throughput only. A memory-hardness proof — a large seeded DAG built and traversed at the start of the CPU test, in the spirit of Ethash — is planned for a later revision to bind `ramGib` to a floor. It is deliberately unspecified here; when it lands it will extend the existing challenge/attestation flow rather than change it.
 
 ### 5.6 Expiry and re-attestation
 
@@ -443,7 +443,6 @@ GET /v1/offers?model=cpu/v1
               &arch=x64
               &cores.min=8
               &ram.gib.min=32
-              &ram.proven=true
               &score.single.min=600
               &score.quad.min=2500
               &score.eight.min=5000
@@ -592,7 +591,6 @@ create table attestations (
   arch           text not null,
   core_count     int  not null,
   ram_gib        numeric not null,
-  ram_proven     boolean not null default false,
   cpu_model      text,
   score_single   bigint not null,        -- CU/s
   score_quad     bigint not null,
@@ -615,7 +613,7 @@ create table offers (
   revoked_at     timestamptz,
   created_at     timestamptz not null,
   -- denormalized indexed columns for query compilation (from declared + attestation):
-  arch text, core_count int, ram_gib numeric, ram_proven boolean,
+  arch text, core_count int, ram_gib numeric,
   score_single bigint, score_quad bigint, score_eight bigint, score_full bigint
 );
 create index on offers (model, arch, score_full, core_count) where revoked_at is null;
