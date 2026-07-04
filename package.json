@@ -1,0 +1,19 @@
+{
+  "name": "atlas-compute-market",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/server.ts",
+    "dev": "bun --watch src/server.ts",
+    "test": "bun test",
+    "bench-client": "bun run scripts/bench-client.ts"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.2.0",
+    "@noble/hashes": "^2.2.0"
+  },
+  "devDependencies": {
+    "bun-types": "^1.3.14"
+  }
+}
