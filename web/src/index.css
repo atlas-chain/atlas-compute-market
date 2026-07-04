@@ -76,6 +76,13 @@ input { width: 90px; }
 }
 .wordmark .bracket { color: var(--ark-orange); }
 #topbar h1 { margin: 0; font: inherit; display: inline; text-transform: uppercase; }
+.primary-nav { display: flex; align-items: center; gap: 4px; }
+.primary-nav a {
+  color: #e9e6de; padding: 5px 10px; border-radius: var(--r-sm);
+  font: 11px var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase;
+}
+.primary-nav a:hover { background: rgba(246, 244, 239, 0.12); text-decoration: none; }
+.primary-nav a.active { background: var(--ark-orange); color: var(--ink); }
 .chip {
   font-family: var(--font-mono); font-size: 11px; padding: 3px 9px;
   border: 1px solid rgba(246, 244, 239, 0.25);

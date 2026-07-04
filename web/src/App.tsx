@@ -4,6 +4,7 @@ import { shortHex } from "./format";
 import { Tiles } from "./Tiles";
 import { ProvidersTable } from "./ProvidersTable";
 import { OffersTable } from "./OffersTable";
+import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 
 export default function App() {
   const { data: spec } = usePoll(() => api.spec(), 300_000);
@@ -20,6 +21,10 @@ export default function App() {
           <span className="bracket">]</span>
           <span>Compute Market</span>
         </span>
+        <nav className="primary-nav" aria-label="Market sections">
+          <NavLink to="/providers">Providers</NavLink>
+          <NavLink to="/offers">Offers</NavLink>
+        </nav>
         {spec && <span className="chip">spec {spec.version}</span>}
         {spec && <span className="chip">{spec.models.join(" · ")}</span>}
         {spec && <span className="chip">unit {spec.unit}</span>}
@@ -39,8 +44,11 @@ export default function App() {
       <main>
         {statsError && !stats && <p className="error-note">registry unreachable: {statsError}</p>}
         <Tiles stats={stats} />
-        <ProvidersTable />
-        <OffersTable unit={spec?.unit ?? "GLM"} />
+        <Routes>
+          <Route path="/providers" element={<ProvidersTable />} />
+          <Route path="/offers" element={<OffersTable unit={spec?.unit ?? "GLM"} />} />
+          <Route path="*" element={<Navigate to="/providers" replace />} />
+        </Routes>
       </main>
 
       <footer>
