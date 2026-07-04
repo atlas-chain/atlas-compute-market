@@ -347,9 +347,9 @@ The frequently-changing part — the dynamic offer. Stored only in Redis (latest
 }
 ```
 
-`minPricePerHour` is the price to rent the offered machine (as attested) for one hour, a non-negative decimal string denominated in `unit`. There is **no setup / `start` price — it is 0 by design.** "Non-negotiable" means the registry advertises exactly this floor: a requestor pays at least it and MAY tip above. The name `minPricePerHour` (rather than `pricePerHour`) anticipates a future bidding model in which the floor becomes an auction reserve and requestors submit competing bids above it — no schema change when that lands.
+`minPricePerHour` is the price to rent the offered machine (as attested) for one hour, a non-negative decimal string denominated in `unit`, **at most 8 characters long** (e.g. `"0.000123"`, `"12345.67"`, `"0"`). The 8-character cap bounds precision and range and keeps the liveness snapshot compact (§8.5); a longer value is rejected with `VALIDATION`. There is **no setup / `start` price — it is 0 by design.** "Non-negotiable" means the registry advertises exactly this floor: a requestor pays at least it and MAY tip above. The name `minPricePerHour` (rather than `pricePerHour`) anticipates a future bidding model in which the floor becomes an auction reserve and requestors submit competing bids above it — no schema change when that lands.
 
-Validation on write: signer matches the offer's provider; `minPricePerHour` is a non-negative decimal string; `validUntil − signedAt ≤ 3600 s`; `seq` strictly increasing. An offer with no unexpired DynamicTerms is **stale** and excluded from default query results (§10).
+Validation on write: signer matches the offer's provider; `minPricePerHour` is a non-negative decimal string of at most 8 characters; `validUntil − signedAt ≤ 3600 s`; `seq` strictly increasing. An offer with no unexpired DynamicTerms is **stale** and excluded from default query results (§10).
 
 ### 6.4 Revocation (`type: "revoke/v1"`)
 
@@ -456,7 +456,7 @@ GET /v1/liveness            → compact snapshot of all live offers
 
 Because it is unfiltered, the response is identical for every caller, so the service builds it once per short interval and serves the cached blob to everyone — a couple thousand offers is a single small response, and per-request server cost is ~0. Clients watch price and liveness in it, and use `GET /v1/offers` (§8.4) for hardware/score filtering and full signed objects.
 
-Format is deliberately minimal — a flat columnar list of `[offerId, minPricePerHour]` pairs (no repeated JSON keys), with `at` as unix seconds (this is an ephemeral, machine-read index, so the ISO/signing convention of §3.6 does not apply):
+Format is deliberately minimal — a flat columnar list of `[offerKey, minPricePerHour]` pairs (no repeated JSON keys), with `at` as unix seconds (this is an ephemeral, machine-read index, so the ISO/signing convention of §3.6 does not apply):
 
 ```json
 {
@@ -464,17 +464,18 @@ Format is deliberately minimal — a flat columnar list of `[offerId, minPricePe
   "ttlSec": 1,               // how long this blob is valid; poll no faster than this
   "unit": "GLM",             // currency for every minPricePerHour below
   "count": 1893,             // number of live offers
-  "cols": ["offerId", "minPricePerHour"],
+  "cols": ["offerKey", "minPricePerHour"],
   "rows": [
-    ["0x9f…", "0.05"],
-    ["0x3c…", "0.08"]
+    ["9f3c1a7be0d24518aa07", "0.05"],
+    ["3c88ab4f109e7d5520b1", "0.08"]
   ]
 }
 ```
 
 Semantics:
 
-- Each `rows` entry is one **live** offer, positional per `cols`: its `offerId` and current `minPricePerHour` (decimal string in `unit`). Nothing else — freshness is conveyed by presence, not a field.
+- Each `rows` entry is one **live** offer, positional per `cols`: its `offerKey` and current `minPricePerHour` (decimal string in `unit`, ≤ 8 chars per §6.3). Nothing else — freshness is conveyed by presence, not a field.
+- **`offerKey` is a truncated offer ID** — the **first 80 bits of the offerId**: 20 lowercase hex chars, with no `0x` prefix (e.g. `9f3c1a7be0d24518aa07`), not the full 32-byte hash. 80 bits is collision-resistant far past this endpoint's scale (thousands of offers), so it uniquely identifies a live offer in practice. Resolve it to a full offer by prefix-matching against offers already fetched via `GET /v1/offers` (§8.4); the server MAY also accept a 20-hex `offerKey` in place of the full id on `GET /v1/offers/{offerId}` (returning `VALIDATION` in the astronomically unlikely event two live offers share a prefix).
 - **Presence is liveness.** An offer appears iff it has an unexpired DynamicTerms record. An offer with no live terms (stale), revoked, or expired simply has **no entry** — the list is exactly the live set. A poller detects a gone offer by its absence from the next snapshot, and diffs successive snapshots itself if it wants transitions.
 - The blob is **unsigned server-derived data** — a liveness index, like `meta` (§3.4), not authoritative. To transact, a requestor fetches the signed template + terms via `GET /v1/offers/{offerId}` (§8.3) and verifies them; that fetch also yields the provider, capacity, and validity window. Liveness tells you *what to fetch*, not *what to trust*.
 - Responses SHOULD be served with `Content-Encoding: gzip`; two columns over a few thousand rows compress to a couple KB.
