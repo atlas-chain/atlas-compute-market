@@ -1,0 +1,121 @@
+/** Typed fetchers for the registry's read API (spec §8). */
+
+export interface Scores {
+  singleCore: number;
+  quadCore: number;
+  eightCore: number;
+  full: number;
+  ramBandwidth: number | null;
+  dagHash: number | null;
+}
+
+export interface Stats {
+  at: number;
+  unit: string;
+  providers: { total: number; active: number };
+  offers: { active: number; live: number };
+  attestations: { valid: number };
+  capacity: { liveCores: number; liveRamGib: number };
+  price: { min: number; median: number; max: number } | null;
+}
+
+export interface ProviderItem {
+  providerId: string;
+  displayName: string;
+  heartbeatIntervalSec: number;
+  activeOffers: number;
+  liveOffers: number;
+  attestation: {
+    coreCount: number;
+    ramGib: number;
+    cpuModel: string | null;
+    scores: Scores;
+    expiresAt: string;
+  } | null;
+  firstSeenAt: string;
+  lastSeenAt: string | null;
+}
+
+export interface ProviderList {
+  items: ProviderItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ProviderDetail {
+  envelope: { payload: Record<string, unknown>; signature: string };
+  meta: { hash: string; receivedAt: string };
+  attestation: { id: string; model: string; scores: Scores; expiresAt: string } | null;
+  stats: { activeOffers: number; lastSeenAt: string | null; firstSeenAt: string };
+}
+
+export interface Envelope<P = Record<string, unknown>> {
+  envelope: { payload: P; signature: string };
+  meta: { hash: string | null; receivedAt: string };
+}
+
+export type OfferStatus = "active" | "stale" | "expired" | "revoked";
+
+export interface OfferItem {
+  offerId: string;
+  template: Envelope<{ providerId: string; expiresAt: string; constraintsHint?: string }>;
+  attestation: Envelope<{ coreCount: number; ramGib: number; cpuModel?: string; scores: Scores }>;
+  terms: Envelope<{
+    minPricePerHour: string;
+    unit: string;
+    validUntil: string;
+    capacity?: { coresFree?: number };
+  }> | null;
+  status: OfferStatus;
+}
+
+export interface OfferList {
+  items: OfferItem[];
+  nextCursor: string | null;
+}
+
+export interface Spec {
+  version: string;
+  models: string[];
+  unit: string;
+  serviceKey: string;
+}
+
+export interface Health {
+  postgres: string;
+  redis: string;
+}
+
+export interface OfferFilters {
+  "cores.min"?: string;
+  "ram.gib.min"?: string;
+  "score.full.min"?: string;
+  "price.perHour.max"?: string;
+  freshness?: string;
+  sort?: string;
+}
+
+async function get<T>(path: string): Promise<T> {
+  const res = await fetch(path);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error?.message ?? `${res.status} on ${path}`);
+  }
+  return res.json();
+}
+
+export const api = {
+  stats: () => get<Stats>("/v1/stats"),
+  spec: () => get<Spec>("/v1/spec"),
+  health: () => get<Health>("/v1/health"),
+  providers: (limit: number, offset: number) => get<ProviderList>(`/v1/providers?limit=${limit}&offset=${offset}`),
+  provider: (id: string) => get<ProviderDetail>(`/v1/providers/${id}`),
+  offers: (filters: OfferFilters, limit: number, cursor?: string | null) => {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(filters)) if (v) q.set(k, v);
+    q.set("limit", String(limit));
+    if (cursor) q.set("cursor", cursor);
+    return get<OfferList>(`/v1/offers?${q}`);
+  },
+};

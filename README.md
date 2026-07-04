@@ -53,6 +53,18 @@ PROVIDER_PRIVKEY=0x<32-byte-hex> bun run scripts/bench-client.ts
 
 Key environment variables: `PORT`, `DATABASE_URL`, `REDIS_URL`, `ATLAS_SERVICE_PRIVKEY`, and benchmark tuning `ATLAS_CHAIN_LEN` / `ATLAS_CHECKPOINTS` / `ATLAS_SAMPLES` (see `src/config.ts`).
 
+## Dashboard
+
+`web/` is a Vite + React market dashboard (stats, provider directory, offer browser) that the registry serves on all non-`/v1` paths when `web/dist` exists; the Docker image builds it in. For frontend development:
+
+```sh
+cd web && bun install
+bun run dev        # Vite dev server on :5173, proxies /v1 to localhost:8080 (override: ATLAS_API_TARGET)
+bun run build      # emits web/dist for the registry to serve
+```
+
+With no real providers around, seed dummy ones (fake attestations + heartbeats — dev only): `ATLAS_DEV_SEED=10 bun start`.
+
 ## Layout
 
 | Path | What |
