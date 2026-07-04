@@ -66,6 +66,11 @@ export async function migrate(): Promise<void> {
   await sql`create index if not exists offers_query_idx on offers (model, arch, score_full, core_count) where revoked_at is null`;
   await sql`create index if not exists offers_provider_idx on offers (provider_id)`;
   await sql`create index if not exists offers_expiry_idx on offers (expires_at)`;
+
+  // Repair: early builds double-encoded jsonb (a jsonb *string* holding JSON,
+  // via `${JSON.stringify(x)}::jsonb`), which broke SQL-side `->>` access.
+  await sql`update payload_log set payload = (payload #>> '{}')::jsonb where jsonb_typeof(payload) = 'string'`;
+  await sql`update offers set template = (template #>> '{}')::jsonb where jsonb_typeof(template) = 'string'`;
 }
 
 /** Append a durable object; idempotent on hash. */
@@ -78,6 +83,6 @@ export async function logPayload(
 ): Promise<void> {
   await sql`
     insert into payload_log (hash, type, provider_id, payload, signature)
-    values (${hash}, ${type}, ${providerId}, ${JSON.stringify(payload)}::jsonb, ${signature})
+    values (${hash}, ${type}, ${providerId}, ${payload as Record<string, unknown>}, ${signature})
     on conflict (hash) do nothing`;
 }

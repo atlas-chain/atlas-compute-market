@@ -75,7 +75,7 @@ export async function postOffer(req: Request, server: Server<unknown>): Promise<
                         arch, core_count, ram_gib,
                         score_single, score_quad, score_eight, score_full,
                         score_ram_bandwidth, score_dag_hash)
-    values (${hexToBuf(offerId)}, ${providerBytes}, ${a.attestation_id}, ${JSON.stringify(p)}::jsonb,
+    values (${hexToBuf(offerId)}, ${providerBytes}, ${a.attestation_id}, ${p},
             'cpu/v1', ${effectiveExpiry}, now(),
             ${a.arch}, ${a.core_count}, ${a.ram_gib},
             ${a.score_single}, ${a.score_quad}, ${a.score_eight}, ${a.score_full},
