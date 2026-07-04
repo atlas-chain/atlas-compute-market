@@ -316,13 +316,8 @@ The static, rarely-changing part of an offer. Its hash is the **offer ID** and t
   },
   "pricing": {
     "model": "cpu/v1",
-    "kind": "linear/v1",
     "unit": "GLM",
-    "bounds": {
-      "perCoreSec": { "min": "0.0000005", "max": "0.00005" },
-      "perCuSec":   { "min": "0",         "max": "0.000002" },
-      "start":      { "min": "0",         "max": "0.01"     }
-    }
+    "minPricePerHour": "0.05"    // non-negotiable hourly floor for the whole offered machine; start price is 0 by design
   },
   "constraintsHint": "optional free-form",
   "expiresAt": "2026-09-02T08:00:00.000Z"
@@ -332,7 +327,7 @@ The static, rarely-changing part of an offer. Its hash is the **offer ID** and t
 Design notes.
 
 - **The offer links, it does not restate.** `compute.attestationId` is the only capability reference; the referenced attestation (§4.3) is the single source of `arch`, `coreCount`, `ramGib`, `cpuModel`, and the proven `scores`. The offer does not duplicate these — signing the offer over the `attestationId` is the provider's commitment to that capability. Readers get the attestation inline in every offer response (§8.4), so linking costs no extra fetch, and there is no offer-vs-attestation field to drift or police.
-- **Pricing** is compute-model-scoped. For `cpu/v1`: `perCoreSec` is the price per committed core-second, `perCuSec` is an optional performance-normalized price per CU-second (lets requestors compare price-per-work across heterogeneous CPUs), `start` is the per-agreement setup price. Prices are decimal strings to avoid float ambiguity in canonicalization. `bounds` declares the range within which all future dynamic terms must fall — the commitment that makes off-chain price updates verifiable and, later, slashable: two signed messages proving a violation are self-contained fraud evidence.
+- **Pricing is one number.** For `cpu/v1`, `minPricePerHour` is the price to rent the offered machine (as attested) for one hour, a non-negative decimal string denominated in `unit`. There is **no setup / `start` price — it is 0 by design.** The floor is fixed for the life of the offer; to change price a provider publishes a new template (new `offerId`), consistent with the template being static and content-addressed. "Non-negotiable" means the registry advertises exactly this floor: a requestor pays at least it and MAY tip above. The name `minPricePerHour` (rather than `pricePerHour`) anticipates a future bidding model in which the floor becomes an auction reserve and requestors submit competing bids above it — no schema change when that lands.
 - `expiresAt` is a hard template expiry (max 180 days ahead); expiry requires no write. An offer is also `expired` when its referenced attestation expires (§5.6), whichever comes first.
 
 **Validation on submit:** provider registered; `compute.model` supported; attestation exists, belongs to this `providerId`, model matches, and is unexpired (`UNKNOWN_ATTESTATION` / `ATTESTATION_EXPIRED`); active-offer cap not exceeded (`LIMIT_EXCEEDED`). The attestation already enforced `arch == "x64"` at attestation time, so the offer inherits it. The server copies `arch`/`coreCount`/`ramGib`/`scores` from the attestation into the offer's denormalized query columns (§14) at submit time.
@@ -341,7 +336,7 @@ Design notes.
 
 ### 6.3 DynamicTerms (`type: "terms/v1"`) — doubles as heartbeat
 
-The frequently-changing part. Stored only in Redis (latest per offer), never in Postgres. Its arrival is the liveness signal.
+The frequently-changing part. Stored only in Redis (latest per offer), never in Postgres. Its arrival is the liveness signal. It carries only live capacity — **price is not here**: the offer's price is fixed in the template (§6.2), so terms never restate or float it.
 
 ```json
 {
@@ -351,16 +346,11 @@ The frequently-changing part. Stored only in Redis (latest per offer), never in 
   "seq": 4711,
   "signedAt": "2026-06-04T08:01:00.000Z",
   "validUntil": "2026-06-04T08:04:00.000Z",
-  "prices": {
-    "perCoreSec": "0.000002",
-    "perCuSec": "0.0000008",
-    "start": "0.001"
-  },
   "capacity": { "coresFree": 12 }
 }
 ```
 
-Validation on write: signer matches the offer's provider; every price within the template's declared `bounds` (violation → `BOUNDS_VIOLATION`, payload still logged for evidence); `validUntil − signedAt ≤ 3600 s`; `seq` strictly increasing. An offer with no unexpired DynamicTerms is **stale** and excluded from default query results (§10).
+Validation on write: signer matches the offer's provider; `validUntil − signedAt ≤ 3600 s`; `seq` strictly increasing. An offer with no unexpired DynamicTerms is **stale** and excluded from default query results (§10).
 
 ### 6.4 Revocation (`type: "revoke/v1"`)
 
@@ -428,7 +418,7 @@ Base path `/v1`. All bodies are `application/json`. Provider write endpoints tak
 }
 ```
 
-`POST /v1/offers/{offerId}/terms` — submit DynamicTerms (heartbeat). Hot path; target p99 < 15 ms. Writes only to Redis (`SET key value PX freshnessWindow`) and publishes to the offer's channel. Errors: `SIG_MISMATCH`, `UNKNOWN_OFFER`, `BOUNDS_VIOLATION`, `SEQ_REGRESSION`, `TERMS_TOO_LONG`.
+`POST /v1/offers/{offerId}/terms` — submit DynamicTerms (heartbeat). Hot path; target p99 < 15 ms. Writes only to Redis (`SET key value PX freshnessWindow`) and publishes to the offer's channel. Errors: `SIG_MISMATCH`, `UNKNOWN_OFFER`, `SEQ_REGRESSION`, `TERMS_TOO_LONG`.
 
 `POST /v1/offers/{offerId}/revoke` — submit Revocation. Durable.
 
@@ -447,13 +437,13 @@ GET /v1/offers?model=cpu/v1
               &score.full.min=10000
               &score.ramBandwidth.min=40000
               &score.dagHash.min=2000000
-              &price.perCoreSec.max=0.00002
+              &price.perHour.max=0.10
               &freshness=strict|normal|any     (default: normal)
               &sort=price|score.full|score.single|score.ramBandwidth|score.dagHash|random   (default: random)
               &limit=20&cursor=…
 ```
 
-Semantics: numeric fields support `.min`/`.max`; `score.*` filter against the referenced **attestation's proven scores** (the `score.ramBandwidth` / `score.dagHash` filters match only attestations whose respective score is non-null, so until the memory-hard lane is defined they exclude everything — §5.5); `price.*` filter against **current DynamicTerms**, not template bounds; `arch` exact-match. `freshness=strict` requires terms newer than 1× the provider's interval, `normal` allows 2× + 30 s grace (§10), `any` includes stale offers (template + attestation only). Default sort is `random` within the result set to avoid herding requestors onto one provider; deterministic pagination uses a cursor over a per-query seed. `sort=score.*` ranks by proven capability.
+Semantics: numeric fields support `.min`/`.max`; `score.*` filter against the referenced **attestation's proven scores** (the `score.ramBandwidth` / `score.dagHash` filters match only attestations whose respective score is non-null, so until the memory-hard lane is defined they exclude everything — §5.5); `price.perHour` filters against the template's static `minPricePerHour`; `arch` exact-match. `freshness=strict` requires terms newer than 1× the provider's interval, `normal` allows 2× + 30 s grace (§10), `any` includes stale offers (template + attestation only). Default sort is `random` within the result set to avoid herding requestors onto one provider; deterministic pagination uses a cursor over a per-query seed. `sort=score.*` ranks by proven capability.
 
 Response is `{ "items": [ …offer objects… ], "cursor": "0x…", "nextCursor": "…" | null }`. Items match `GET /v1/offers/{offerId}`. `cursor` is the change-feed position corresponding to this snapshot — a client that wants to stay current polls §8.5 with it. `nextCursor` is the pagination cursor for the result set itself (null when exhausted). The requestor **must** verify the template and terms provider-signatures and SHOULD verify the attestation service-signature client-side; the reference client treats unverifiable items as absent.
 
@@ -571,11 +561,11 @@ Benchmark runs are deliberately expensive on the provider and cheap on the servi
 ## 13. Error format
 
 ```json
-{ "error": { "code": "BOUNDS_VIOLATION", "message": "perCuSec 0.002 exceeds template max 0.000002",
-             "details": { "field": "prices.perCuSec" } } }
+{ "error": { "code": "VALIDATION", "message": "minPricePerHour must be a non-negative decimal string",
+             "details": { "field": "pricing.minPricePerHour" } } }
 ```
 
-Codes: `VALIDATION`, `SIG_MISMATCH`, `STALE_PAYLOAD`, `SEQ_REGRESSION`, `UNKNOWN_PROVIDER`, `UNKNOWN_OFFER`, `UNKNOWN_ATTESTATION`, `UNKNOWN_CHALLENGE`, `ATTESTATION_EXPIRED`, `ARCH_UNSUPPORTED`, `BENCH_FAILED`, `BOUNDS_VIOLATION`, `EXPIRED`, `EXPIRED_CURSOR`, `REVOKED`, `LIMIT_EXCEEDED`, `TERMS_TOO_LONG`, `RATE_LIMITED`, `INTERNAL`. HTTP mapping: 400 validation/signature/arch/bench classes, 404 unknowns, 409 `SEQ_REGRESSION`/`STALE_PAYLOAD`/`EXPIRED_CURSOR`, 429 rate limits, 500 internal.
+Codes: `VALIDATION`, `SIG_MISMATCH`, `STALE_PAYLOAD`, `SEQ_REGRESSION`, `UNKNOWN_PROVIDER`, `UNKNOWN_OFFER`, `UNKNOWN_ATTESTATION`, `UNKNOWN_CHALLENGE`, `ATTESTATION_EXPIRED`, `ARCH_UNSUPPORTED`, `BENCH_FAILED`, `EXPIRED`, `EXPIRED_CURSOR`, `REVOKED`, `LIMIT_EXCEEDED`, `TERMS_TOO_LONG`, `RATE_LIMITED`, `INTERNAL`. HTTP mapping: 400 validation/signature/arch/bench classes, 404 unknowns, 409 `SEQ_REGRESSION`/`STALE_PAYLOAD`/`EXPIRED_CURSOR`, 429 rate limits, 500 internal.
 
 ---
 
@@ -632,12 +622,13 @@ create table offers (
   expires_at     timestamptz not null,   -- min(template expiry, attestation expiry)
   revoked_at     timestamptz,
   created_at     timestamptz not null,
+  min_price_per_hour numeric not null,    -- from the template's pricing.minPricePerHour
   -- denormalized indexed columns for query compilation (copied from the referenced attestation at submit time):
   arch text, core_count int, ram_gib numeric,
   score_single bigint, score_quad bigint, score_eight bigint, score_full bigint,
   score_ram_bandwidth bigint, score_dag_hash bigint
 );
-create index on offers (model, arch, score_full, core_count) where revoked_at is null;
+create index on offers (model, arch, score_full, core_count, min_price_per_hour) where revoked_at is null;
 create index on offers (provider_id);
 create index on offers (expires_at);
 
@@ -651,7 +642,7 @@ create table epochs (
 );
 ```
 
-Price filtering against current terms happens after the SQL candidate fetch, in-process against the Redis batch lookup (candidate sets are small once hardware and score filters apply).
+Price is static (from the template), so `price.perHour` compiles to a plain SQL predicate on `min_price_per_hour` — no post-fetch Redis lookup is needed for filtering; the Redis terms lookup only supplies liveness and live capacity.
 
 ### Redis keys
 
@@ -673,7 +664,7 @@ stream:offers          → capped change-feed stream (XADD MAXLEN ~; all offer e
 | Capability | service-signed attestation over benchmark proof | attestation hash committed on-chain; challenge issuable by staked verifiers | verify attestation sig → verify on-chain commitment |
 | Offer commitment | hash in transparency feed epoch root | same hash in on-chain epoch root | root source URL → chain RPC |
 | Liveness | signed terms TTL + hire-time probe | unchanged | none |
-| Spam control | rate limits | stake + slashing on bounds/benchmark fraud | none |
+| Spam control | rate limits | stake + slashing on benchmark fraud | none |
 | Hardware-swap fraud | expiry + surprise re-challenge | stake slashed on failed re-challenge | none |
 | Censorship | trusted operator + auditable feed | multiple staked aggregators | query N indexers, union results |
 
