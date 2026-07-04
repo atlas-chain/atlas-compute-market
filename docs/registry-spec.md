@@ -142,11 +142,12 @@ A CPU capability has two parts.
   "singleCore": 812,      // 1-worker lane
   "quadCore":   3180,     // 4-worker lane
   "eightCore":  6100,     // 8-worker lane
-  "full":       11800     // coreCount-worker lane
+  "full":       11800,    // coreCount-worker lane
+  "ram":        null      // memory-hard lane; reserved, populated once the DAG test is defined (§5.5)
 }
 ```
 
-CU/s is a market signal, not a physical unit: it is meaningful for comparing providers of the same `arch`. When further models/arches are added, scores are only ever compared within an `(model, arch)` class. The single-core score is the sequentially-proven ceiling on per-thread throughput; the full score is the whole-machine throughput; quad and eight are the scaling points at 4 and 8 parallel workers (§5.2 explains why each is faithful).
+The CPU scores are market signals, not physical units: they are meaningful for comparing providers of the same `arch`. When further models/arches are added, scores are only ever compared within an `(model, arch)` class. The single-core score is the sequentially-proven ceiling on per-thread throughput; the full score is the whole-machine throughput; quad and eight are the scaling points at 4 and 8 parallel workers (§5.2 explains why each is faithful). The `ram` score is the output of the memory-hard lane; its unit and work function are pinned when that lane is specified (§5.5), and it is `null` on attestations produced before then.
 
 ### 4.3 CapabilityAttestation (`type: "attest/cpu/v1"`) — service-signed
 
@@ -162,7 +163,7 @@ Produced by the service at the end of a successful benchmark run (§5). It is th
   "coreCount": 16,
   "ramGib": 64,
   "cpuModel": "AMD EPYC 9354",
-  "scores": { "singleCore": 812, "quadCore": 3180, "eightCore": 6100, "full": 11800 },
+  "scores": { "singleCore": 812, "quadCore": 3180, "eightCore": 6100, "full": 11800, "ram": null },
   "measuredAt": "2026-06-04T08:00:12.345Z",   // service clock
   "expiresAt":  "2026-07-04T08:00:12.345Z",   // measuredAt + attestation TTL (default 30 days)
   "attesterKey": "0x…",          // service signing address
@@ -206,6 +207,7 @@ A **lane** runs `workers` independent chains in parallel (different `workerIndex
 | `quad` | 4 | throughput at 4 parallel workers |
 | `eight` | 8 | throughput at 8 parallel workers |
 | `full` | `coreCount` (declared, capped at 256) | whole-machine throughput |
+| `ram` | (memory-hard) | usable-RAM-bound throughput — **reserved**, work function deferred to §5.5 |
 
 The service **issues each lane separately and times it itself** (§5.3); provider-reported timing is never trusted. Lane score:
 
@@ -259,7 +261,9 @@ Soundness: a provider that skips a fraction `f` of a chain's steps corrupts at l
 
 ### 5.5 RAM (declared in v0.2)
 
-`ramGib` is a declared descriptor in v0.2; the benchmark proves CPU throughput only. A memory-hardness proof — a large seeded DAG built and traversed at the start of the CPU test, in the spirit of Ethash — is planned for a later revision to bind `ramGib` to a floor. It is deliberately unspecified here; when it lands it will extend the existing challenge/attestation flow rather than change it.
+`ramGib` is a declared descriptor in v0.2; the benchmark proves CPU throughput only. The `ram` lane and its `scores.ram` slot are **reserved** now (so the attestation, query, and storage schemas are stable) but produce `null` until the work function is defined.
+
+That work function — a memory-hardness proof: a large seeded DAG built and traversed at the start of the CPU test, in the spirit of Ethash — is planned for a later revision to bind `ramGib` to a floor and yield the `ram` score. It is deliberately unspecified here; when it lands it will extend the existing challenge/attestation flow rather than change it, and it will pin the `ram` score's unit.
 
 ### 5.6 Expiry and re-attestation
 
@@ -447,13 +451,14 @@ GET /v1/offers?model=cpu/v1
               &score.quad.min=2500
               &score.eight.min=5000
               &score.full.min=10000
+              &score.ram.min=40000
               &price.perCoreSec.max=0.00002
               &freshness=strict|normal|any     (default: normal)
-              &sort=price|score.full|score.single|random   (default: random)
+              &sort=price|score.full|score.single|score.ram|random   (default: random)
               &limit=20&cursor=…
 ```
 
-Semantics: numeric fields support `.min`/`.max`; `score.*` filter against the referenced **attestation's proven scores**; `price.*` filter against **current DynamicTerms**, not template bounds; `arch` exact-match. `freshness=strict` requires terms newer than 1× the provider's interval, `normal` allows 2× + 30 s grace (§10), `any` includes stale offers (template + attestation only). Default sort is `random` within the result set to avoid herding requestors onto one provider; deterministic pagination uses a cursor over a per-query seed. `sort=score.*` ranks by proven capability.
+Semantics: numeric fields support `.min`/`.max`; `score.*` filter against the referenced **attestation's proven scores** (a `score.ram` filter matches only attestations whose `ram` score is non-null, so until the memory-hard lane is defined it excludes everything — §5.5); `price.*` filter against **current DynamicTerms**, not template bounds; `arch` exact-match. `freshness=strict` requires terms newer than 1× the provider's interval, `normal` allows 2× + 30 s grace (§10), `any` includes stale offers (template + attestation only). Default sort is `random` within the result set to avoid herding requestors onto one provider; deterministic pagination uses a cursor over a per-query seed. `sort=score.*` ranks by proven capability.
 
 Response items match `GET /v1/offers/{offerId}`. The requestor **must** verify the template and terms provider-signatures and SHOULD verify the attestation service-signature (and MAY re-verify the proof) client-side; the reference client treats unverifiable items as absent.
 
@@ -596,6 +601,7 @@ create table attestations (
   score_quad     bigint not null,
   score_eight    bigint not null,
   score_full     bigint not null,
+  score_ram      bigint,                  -- memory-hard lane; null until the DAG test is defined (§5.5)
   challenge      jsonb not null,         -- retained challenge + proofs, for re-verification
   measured_at    timestamptz not null,
   expires_at     timestamptz not null,
@@ -614,7 +620,7 @@ create table offers (
   created_at     timestamptz not null,
   -- denormalized indexed columns for query compilation (from declared + attestation):
   arch text, core_count int, ram_gib numeric,
-  score_single bigint, score_quad bigint, score_eight bigint, score_full bigint
+  score_single bigint, score_quad bigint, score_eight bigint, score_full bigint, score_ram bigint
 );
 create index on offers (model, arch, score_full, core_count) where revoked_at is null;
 create index on offers (provider_id);
