@@ -42,9 +42,18 @@ export const config = {
   heartbeatMax: 900,
 
   livenessTtlMs: num("ATLAS_LIVENESS_TTL_MS", 1000),
+  statsTtlMs: num("ATLAS_STATS_TTL_MS", 2000),
   queryMaxCandidates: 1000,
   queryDefaultLimit: 20,
   queryMaxLimit: 100,
+  providersDefaultLimit: 50,
+  providersMaxLimit: 200,
+
+  // static frontend (web/dist); served when the directory exists
+  webDistDir: process.env.ATLAS_WEB_DIST ?? new URL("../web/dist", import.meta.url).pathname,
+
+  // dev-only: seed N dummy providers with fake attestations + heartbeats (never in production)
+  devSeed: num("ATLAS_DEV_SEED", 0),
 
   // rate limits (§12): [max, windowMs]
   rl: {

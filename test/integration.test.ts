@@ -18,6 +18,7 @@ process.env.ATLAS_CHAIN_LEN = "4096";
 process.env.ATLAS_CHECKPOINTS = "64";
 process.env.ATLAS_SAMPLES = "8";
 process.env.ATLAS_LIVENESS_TTL_MS = "50";
+process.env.ATLAS_STATS_TTL_MS = "50";
 
 const docker = Bun.which("docker") !== null && (await Bun.$`docker info`.quiet().nothrow()).exitCode === 0;
 const CONTAINERS = ["atlas-it-pg", "atlas-it-redis"];
@@ -94,6 +95,28 @@ describe.skipIf(!docker)("end-to-end provider → requestor flow", () => {
     expect(body.attestation.id).toBe(flow.attestation.attestationId);
     expect(body.stats.activeOffers).toBe(1);
     expect(body.stats.lastSeenAt).not.toBeNull();
+  });
+
+  test("provider directory lists the provider with live-offer count", async () => {
+    const body = await jsonOf(await fetch(`${BASE}/v1/providers`));
+    expect(body.total).toBe(1);
+    const p = body.items.find((i: any) => i.providerId === flow.providerId);
+    expect(p).toBeDefined();
+    expect(p.activeOffers).toBe(1);
+    expect(p.liveOffers).toBe(1);
+    expect(p.attestation.scores.full).toBeGreaterThan(0);
+    expect(p.lastSeenAt).not.toBeNull();
+  });
+
+  test("stats aggregates cover providers, offers, capacity, and price", async () => {
+    const body = await jsonOf(await fetch(`${BASE}/v1/stats`));
+    expect(body.unit).toBe("GLM");
+    expect(body.providers).toEqual({ total: 1, active: 1 });
+    expect(body.offers).toEqual({ active: 1, live: 1 });
+    expect(body.attestations.valid).toBe(1);
+    expect(body.capacity.liveCores).toBe(2);
+    expect(body.capacity.liveRamGib).toBe(16);
+    expect(body.price).toEqual({ min: 0.05, median: 0.05, max: 0.05 });
   });
 
   test("query returns the live offer with verifiable envelopes", async () => {

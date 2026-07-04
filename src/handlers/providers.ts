@@ -68,6 +68,89 @@ export async function postProvider(req: Request, server: Server<unknown>): Promi
   return json({ providerId: w.signer }, existing.length > 0 ? 200 : 201);
 }
 
+/** GET /v1/providers — paginated directory of registered providers (§8.1). Unsigned aggregates. */
+export async function listProviders(req: Request, server: Server<unknown>): Promise<Response> {
+  const ip = clientIp(req, server);
+  const [maxQ, winQ] = config.rl.queryPerIp;
+  const retry = await redis.rateLimit("query", ip, maxQ, winQ);
+  if (retry > 0) throw err("RATE_LIMITED", "query rate exceeded", { retryAfterMs: retry });
+
+  const url = new URL(req.url);
+  const intParam = (name: string, def: number): number => {
+    const v = url.searchParams.get(name);
+    if (v === null) return def;
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 0) throw err("VALIDATION", `${name} must be a non-negative integer`, { field: name });
+    return n;
+  };
+  const limit = Math.min(Math.max(1, intParam("limit", config.providersDefaultLimit)), config.providersMaxLimit);
+  const offset = intParam("offset", 0);
+
+  const [{ total }] = await sql`select count(*)::int as total from providers`;
+  const rows: Record<string, unknown>[] = await sql`
+    select p.provider_id, p.first_seen_at, p.heartbeat_interval_sec,
+           pl.payload->>'displayName' as display_name,
+           a.core_count, a.ram_gib, a.cpu_model, a.expires_at as att_expires_at,
+           a.score_single, a.score_quad, a.score_eight, a.score_full,
+           a.score_ram_bandwidth, a.score_dag_hash,
+           (select count(*)::int from offers o
+             where o.provider_id = p.provider_id and o.revoked_at is null and o.expires_at > now()) as active_offers
+    from providers p
+    join payload_log pl on pl.hash = p.profile_hash
+    left join lateral (
+      select * from attestations a
+      where a.provider_id = p.provider_id and a.expires_at > now()
+      order by a.measured_at desc limit 1
+    ) a on true
+    order by p.first_seen_at desc, p.provider_id
+    limit ${limit} offset ${offset}`;
+
+  const ids = rows.map((r) => bufToHex(r.provider_id as Uint8Array));
+  const seenMap = await redis.lastSeenBatch(ids);
+
+  // live-offer counts per provider, derived from the Redis live set (empty map when degraded)
+  const liveByProvider = new Map<string, number>();
+  const live = await redis.liveOffers(Date.now());
+  if (live.length > 0) {
+    // bytea[] params aren't serializable by Bun SQL — ship hex and decode in SQL
+    const hexList = live.map(([id]) => id.slice(2)).join(",");
+    const counts = await sql`
+      select provider_id, count(*)::int as n from offers
+      where offer_id in (select decode(h, 'hex') from unnest(string_to_array(${hexList}, ',')) h)
+      group by provider_id`;
+    for (const c of counts) liveByProvider.set(bufToHex(c.provider_id), c.n as number);
+  }
+
+  const items = rows.map((r, i) => ({
+    providerId: ids[i]!,
+    displayName: r.display_name as string,
+    heartbeatIntervalSec: r.heartbeat_interval_sec as number,
+    activeOffers: r.active_offers as number,
+    liveOffers: liveByProvider.get(ids[i]!) ?? 0,
+    attestation:
+      r.att_expires_at === null
+        ? null
+        : {
+            coreCount: r.core_count as number,
+            ramGib: Number(r.ram_gib),
+            cpuModel: (r.cpu_model as string | null) ?? null,
+            scores: {
+              singleCore: Number(r.score_single),
+              quadCore: Number(r.score_quad),
+              eightCore: Number(r.score_eight),
+              full: Number(r.score_full),
+              ramBandwidth: r.score_ram_bandwidth === null ? null : Number(r.score_ram_bandwidth),
+              dagHash: r.score_dag_hash === null ? null : Number(r.score_dag_hash),
+            },
+            expiresAt: (r.att_expires_at as Date).toISOString(),
+          },
+    firstSeenAt: (r.first_seen_at as Date).toISOString(),
+    lastSeenAt: seenMap.get(ids[i]!) ?? null,
+  }));
+
+  return json({ items, total, limit, offset });
+}
+
 export async function getProvider(req: RouteReq): Promise<Response> {
   const id = req.params.providerId?.toLowerCase() ?? "";
   if (!/^0x[0-9a-f]{40}$/.test(id)) throw err("VALIDATION", "invalid providerId");

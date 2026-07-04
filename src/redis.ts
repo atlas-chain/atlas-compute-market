@@ -127,6 +127,14 @@ export const redis = {
     await send("SET", ["liveness:snapshot", blob, "PX", String(pxMs)]);
   },
 
+  async getCachedStats(): Promise<string | null> {
+    return (await send("GET", ["stats:snapshot"])) as string | null;
+  },
+
+  async setCachedStats(blob: string, pxMs: number): Promise<void> {
+    await send("SET", ["stats:snapshot", blob, "PX", String(pxMs)]);
+  },
+
   // ---- seq (replay protection, §3.6) ------------------------------------
 
   /** Returns stored seq or null (absent/degraded — caller rebuilds lazily). */
@@ -147,6 +155,17 @@ export const redis = {
 
   async lastSeen(providerId: string): Promise<string | null> {
     return (await send("GET", [`seen:${providerId}`])) as string | null;
+  },
+
+  async lastSeenBatch(providerIds: string[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (providerIds.length === 0) return out;
+    const raw = (await send("MGET", providerIds.map((id) => `seen:${id}`))) as (string | null)[] | null;
+    if (!raw) return out;
+    raw.forEach((v, i) => {
+      if (v) out.set(providerIds[i]!, v);
+    });
+    return out;
   },
 
   // ---- benchmark challenge state -----------------------------------------

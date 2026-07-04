@@ -392,6 +392,16 @@ Base path `/v1`. All bodies are `application/json`. Provider write endpoints tak
   "stats": { "activeOffers": 3, "lastSeenAt": "…", "firstSeenAt": "…" } }
 ```
 
+`GET /v1/providers?limit=50&offset=0` — paginated directory of registered providers, newest first. Like the liveness snapshot (§8.5), this is **unsigned server-derived data** for browsing/dashboards, not authoritative: to trust a provider's profile, fetch and verify `GET /v1/providers/{providerId}`. Each item carries the display name, the current attestation summary (or null), active/live offer counts, and first/last-seen timestamps (`lastSeenAt` and `liveOffers` come from Redis and degrade to null/0 per §2):
+
+```json
+{ "items": [ { "providerId": "0x…", "displayName": "…", "heartbeatIntervalSec": 30,
+    "activeOffers": 3, "liveOffers": 2,
+    "attestation": { "coreCount": 16, "ramGib": 64, "cpuModel": "…", "scores": {…}, "expiresAt": "…" } | null,
+    "firstSeenAt": "…", "lastSeenAt": "…" | null } ],
+  "total": 128, "limit": 50, "offset": 0 }
+```
+
 ### 8.2 Attestation (benchmark)
 
 `POST /v1/attest/challenge` — open a benchmark run (§5.3 step 1). Body: envelope of `attest-request/v1`. Returns the service-signed `bench-challenge/v1`. Errors: `SIG_MISMATCH`, `UNKNOWN_PROVIDER`, `ARCH_UNSUPPORTED`, `RATE_LIMITED`.
@@ -496,6 +506,19 @@ GET /v1/offers/{offerId}/proof  → { "epoch": 421, "root": "0x…", "index": 17
 ### 8.7 Operational
 
 `GET /v1/health` → `{ "postgres": "ok", "redis": "ok|absent" }` (the `epoch` field is added once §11 ships). `GET /v1/spec` returns this document's version, the supported compute models, and the service's signing key for attestations (and, later, the transparency feed).
+
+`GET /v1/stats` — unsigned market aggregates for dashboards, cached server-side like the liveness blob (a few seconds). Price aggregates are over the **live** set's current `minPricePerHour`; `providers.active` counts providers with ≥ 1 live offer. All Redis-derived numbers degrade to 0/null per §2:
+
+```json
+{ "at": 1780560300, "unit": "GLM",
+  "providers": { "total": 128, "active": 97 },
+  "offers": { "active": 412, "live": 388 },
+  "attestations": { "valid": 120 },
+  "capacity": { "liveCores": 6144, "liveRamGib": 24576 },
+  "price": { "min": 0.01, "median": 0.05, "max": 0.4 } | null }
+```
+
+The service also serves a static human-facing dashboard (the built `web/` bundle) on all non-`/v1` paths; this UI is an ordinary API client and not part of the protocol.
 
 ---
 
