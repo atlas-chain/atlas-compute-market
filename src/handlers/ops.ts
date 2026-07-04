@@ -6,6 +6,7 @@ import { config } from "../config.ts";
 import { err } from "../errors.ts";
 import { addressFromPrivateKey } from "../crypto.ts";
 import { json, clientIp } from "../http.ts";
+import packageJson from "../../package.json" with { type: "json" };
 
 export async function getHealth(): Promise<Response> {
   let pg = "ok";
@@ -16,7 +17,7 @@ export async function getHealth(): Promise<Response> {
   }
   const r = (await redis.available()) ? "ok" : "absent";
   // `epoch` field is added once §11 ships (deferred)
-  return json({ postgres: pg, redis: r }, pg === "ok" ? 200 : 500);
+  return json({ version: packageJson.version, postgres: pg, redis: r }, pg === "ok" ? 200 : 500);
 }
 
 /** GET /v1/stats — unsigned market aggregates for dashboards; cached like the liveness blob (§8.7). */
