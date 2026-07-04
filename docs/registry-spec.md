@@ -18,7 +18,7 @@ The service is designed so that it can later be anchored to a blockchain without
 
 3. **Objects are content-addressed.** The identifier of every immutable object is the hash of its canonical signed payload. These hashes are exactly what will later be committed to a chain in merkle batches; clients referencing objects by hash today will not notice the migration.
 
-4. **Capability is measured, not claimed.** A provider's advertised compute performance is not self-reported. It is the output of a server-issued, time-bounded benchmark, recorded in a **service-signed capability attestation** that any party can independently re-verify from the retained challenge and proof (§4, §5). The service signs a *re-verifiable fact* ("this challenge was answered, proving this throughput"), which is distinct from vouching for a provider's honesty about price or availability — those remain the requestor's problem, checked by signature and by the hire-time probe (§9).
+4. **Capability is measured, not claimed.** A provider's advertised compute performance is not self-reported. It is the output of a server-issued, time-bounded benchmark the provider cannot precompute (§4, §5), recorded in a **service-signed capability attestation** whose hash is committed to an epoch merkle root (§11) so past scores cannot be silently rewritten, and kept honest over time by surprise re-challenge (§5.6). This is distinct from vouching for a provider's honesty about price or availability — those remain the requestor's problem, checked by signature and by the hire-time probe (§9).
 
 ### Non-goals (v0.2)
 
@@ -96,7 +96,7 @@ Every read endpoint returns objects in the same envelope, wrapped with server me
 
 ### 3.5 Service-signed objects
 
-Two object classes are signed by the **service key**, not a provider key: capability attestations (§4.3) and epoch commitments (§11). They carry `attesterKey` and use the same digest scheme with prefix `"\x19Atlas Compute v1:\n"`. They are always independently re-verifiable from data the service retains and serves, so a service signature is a convenience, never a trust root.
+Two object classes are signed by the **service key**, not a provider key: capability attestations (§4.3) and epoch commitments (§11). They carry `attesterKey` and use the same digest scheme with prefix `"\x19Atlas Compute v1:\n"`. Epoch commitments are independently re-verifiable from the leaves the service serves; capability attestations are tamper-evident through their inclusion in an epoch root (§11). A service signature is a convenience, never a trust root.
 
 ### 3.6 Replay protection
 
@@ -174,7 +174,7 @@ Produced by the service at the end of a successful benchmark run (§5). It is th
 
 - **Attestation ID** `= keccak256(prefix || jcs(payload))`, hex with `0x`.
 - Signed by the service key. `providerId` is proven because the underlying benchmark proof was signed by that provider (§5.3).
-- Fully re-verifiable: the challenge and the provider's proof are retained and served at `GET /v1/attestations/{id}/proof`. A requestor who does not trust the service can re-run the checkpoint verification (§5.4) and confirm the scores itself.
+- **Tamper-evident, not replayable.** The service verifies the provider's proof on receipt (§5.4) and then discards it — proofs are bulky and are not persisted. A past attestation is trustworthy afterward through (a) the service signature, (b) its hash committed in an epoch merkle root (§11), so the operator cannot silently alter or backdate a score, and (c) surprise re-challenge (§5.6), which re-establishes capability on demand. A requestor wanting stronger assurance verifies the attestation's epoch-inclusion proof (§8.6) and/or relies on the hire-time probe (§9).
 - **Expiry**: after `expiresAt` the attestation is invalid; offers referencing it become `expired` (§6.2). Default TTL 30 days; the service may also revoke an attestation early by surprise re-challenge failure (§5.6).
 
 ---
@@ -312,13 +312,7 @@ The static, rarely-changing part of an offer. Its hash is the **offer ID** and t
   "signedAt": "2026-06-04T08:00:00.000Z",
   "compute": {
     "model": "cpu/v1",
-    "attestationId": "0x…",     // references a CapabilityAttestation (§4.3)
-    "declared": {
-      "arch": "x64",
-      "coreCount": 16,
-      "ramGib": 64,
-      "cpuModel": "AMD EPYC 9354"
-    }
+    "attestationId": "0x…"      // references a CapabilityAttestation (§4.3); the sole source of hardware + scores
   },
   "pricing": {
     "model": "cpu/v1",
@@ -337,11 +331,11 @@ The static, rarely-changing part of an offer. Its hash is the **offer ID** and t
 
 Design notes.
 
-- `compute.declared` MUST be consistent with the referenced attestation: `arch`, `coreCount`, `ramGib`, `cpuModel` must match the attestation's fields exactly, else `VALIDATION`. The declared block is duplicated into the offer only so the offer is self-describing without a second fetch; the attestation is authoritative and carries the proven `scores`.
+- **The offer links, it does not restate.** `compute.attestationId` is the only capability reference; the referenced attestation (§4.3) is the single source of `arch`, `coreCount`, `ramGib`, `cpuModel`, and the proven `scores`. The offer does not duplicate these — signing the offer over the `attestationId` is the provider's commitment to that capability. Readers get the attestation inline in every offer response (§8.4), so linking costs no extra fetch, and there is no offer-vs-attestation field to drift or police.
 - **Pricing** is compute-model-scoped. For `cpu/v1`: `perCoreSec` is the price per committed core-second, `perCuSec` is an optional performance-normalized price per CU-second (lets requestors compare price-per-work across heterogeneous CPUs), `start` is the per-agreement setup price. Prices are decimal strings to avoid float ambiguity in canonicalization. `bounds` declares the range within which all future dynamic terms must fall — the commitment that makes off-chain price updates verifiable and, later, slashable: two signed messages proving a violation are self-contained fraud evidence.
 - `expiresAt` is a hard template expiry (max 180 days ahead); expiry requires no write. An offer is also `expired` when its referenced attestation expires (§5.6), whichever comes first.
 
-**Validation on submit:** provider registered; `compute.model` supported; attestation exists, belongs to this `providerId`, model matches, and is unexpired (`UNKNOWN_ATTESTATION` / `ATTESTATION_EXPIRED`); declared block matches attestation; `arch == "x64"` (`ARCH_UNSUPPORTED`); active-offer cap not exceeded (`LIMIT_EXCEEDED`).
+**Validation on submit:** provider registered; `compute.model` supported; attestation exists, belongs to this `providerId`, model matches, and is unexpired (`UNKNOWN_ATTESTATION` / `ATTESTATION_EXPIRED`); active-offer cap not exceeded (`LIMIT_EXCEEDED`). The attestation already enforced `arch == "x64"` at attestation time, so the offer inherits it. The server copies `arch`/`coreCount`/`ramGib`/`scores` from the attestation into the offer's denormalized query columns (§14) at submit time.
 
 **Offer ID** `= keccak256(prefix || jcs(offerTemplatePayload))`.
 
@@ -416,8 +410,7 @@ Base path `/v1`. All bodies are `application/json`. Provider write endpoints tak
 
 `POST /v1/attest/{challengeId}/lane/{laneId}` — submit lane proof (§5.3 step 2). Returns `{ verified: true, elapsedMs, workers }`. Errors: `UNKNOWN_CHALLENGE`, `BENCH_FAILED` (verification or timing), `EXPIRED`.
 
-`GET /v1/attestations/{id}` — the signed attestation envelope + meta.
-`GET /v1/attestations/{id}/proof` — the retained challenge + per-lane provider proofs, for independent re-verification.
+`GET /v1/attestations/{id}` — the signed attestation envelope + meta. (Benchmark proofs are verified on receipt and not retained; an attestation's integrity over time is checked via its epoch-inclusion proof, §8.6.)
 
 ### 8.3 Offers
 
@@ -462,7 +455,7 @@ GET /v1/offers?model=cpu/v1
 
 Semantics: numeric fields support `.min`/`.max`; `score.*` filter against the referenced **attestation's proven scores** (the `score.ramBandwidth` / `score.dagHash` filters match only attestations whose respective score is non-null, so until the memory-hard lane is defined they exclude everything — §5.5); `price.*` filter against **current DynamicTerms**, not template bounds; `arch` exact-match. `freshness=strict` requires terms newer than 1× the provider's interval, `normal` allows 2× + 30 s grace (§10), `any` includes stale offers (template + attestation only). Default sort is `random` within the result set to avoid herding requestors onto one provider; deterministic pagination uses a cursor over a per-query seed. `sort=score.*` ranks by proven capability.
 
-Response is `{ "items": [ …offer objects… ], "cursor": "0x…", "nextCursor": "…" | null }`. Items match `GET /v1/offers/{offerId}`. `cursor` is the change-feed position corresponding to this snapshot — a client that wants to stay current polls §8.5 with it. `nextCursor` is the pagination cursor for the result set itself (null when exhausted). The requestor **must** verify the template and terms provider-signatures and SHOULD verify the attestation service-signature (and MAY re-verify the proof) client-side; the reference client treats unverifiable items as absent.
+Response is `{ "items": [ …offer objects… ], "cursor": "0x…", "nextCursor": "…" | null }`. Items match `GET /v1/offers/{offerId}`. `cursor` is the change-feed position corresponding to this snapshot — a client that wants to stay current polls §8.5 with it. `nextCursor` is the pagination cursor for the result set itself (null when exhausted). The requestor **must** verify the template and terms provider-signatures and SHOULD verify the attestation service-signature client-side; the reference client treats unverifiable items as absent.
 
 ### 8.5 Change feed (polling)
 
@@ -512,7 +505,7 @@ GET /v1/offers/{offerId}/proof  → { "epoch": 421, "root": "0x…", "index": 17
 ## 9. Requestor flow (normative summary)
 
 1. Query `GET /v1/offers` with constraints (model, hardware floors, proven-score floors, price ceilings); to stay current, poll the change feed (§8.5) from the snapshot's `cursor`.
-2. Verify template and terms provider-signatures locally; verify the attestation service-signature; drop failures. Optionally re-verify the benchmark proof for high-value rentals.
+2. Verify template and terms provider-signatures locally; verify the attestation service-signature; drop failures. Optionally verify the attestation's epoch-inclusion proof (§8.6) for high-value rentals.
 3. Optionally fetch and verify a merkle proof against the latest published root (mandatory once chain anchoring is live).
 4. Select top-N candidates; initiate P2P negotiation with a short timeout (2–5 s). A non-responsive candidate is dropped and the next tried — this hire-time probe, not the registry, is the authoritative liveness and hardware-still-present check.
 5. Agreement formation, activity, and payment proceed entirely off-registry.
@@ -622,7 +615,6 @@ create table attestations (
   score_full     bigint not null,
   score_ram_bandwidth bigint,             -- memory-hard lane; null until the DAG test is defined (§5.5)
   score_dag_hash      bigint,             -- memory-hard lane; null until the DAG test is defined (§5.5)
-  challenge      jsonb not null,         -- retained challenge + proofs, for re-verification
   measured_at    timestamptz not null,
   expires_at     timestamptz not null,
   signature      bytea not null          -- service signature
@@ -638,7 +630,7 @@ create table offers (
   expires_at     timestamptz not null,   -- min(template expiry, attestation expiry)
   revoked_at     timestamptz,
   created_at     timestamptz not null,
-  -- denormalized indexed columns for query compilation (from declared + attestation):
+  -- denormalized indexed columns for query compilation (copied from the referenced attestation at submit time):
   arch text, core_count int, ram_gib numeric,
   score_single bigint, score_quad bigint, score_eight bigint, score_full bigint,
   score_ram_bandwidth bigint, score_dag_hash bigint
