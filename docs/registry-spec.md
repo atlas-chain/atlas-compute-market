@@ -2,7 +2,7 @@
 
 **Version:** 0.2-draft
 **Status:** for implementation review
-**Stack:** Bun (HTTP/WebSocket), PostgreSQL (durable store), Redis (ephemeral state)
+**Stack:** Bun (HTTP), PostgreSQL (durable store), Redis (ephemeral state)
 
 ---
 
@@ -30,7 +30,7 @@ Censorship resistance, stake-based spam control, and decentralized operation are
 
 ```
  Provider agent                      Requestor agent
-      │  signed writes (HTTP)             │  queries (HTTP) / subscribe (WS)
+      │  signed writes (HTTP)             │  queries + change-feed polls (HTTP)
       │  benchmark round-trips (HTTP)     │
       ▼                                   ▼
  ┌─────────────────────────────────────────────────┐
@@ -47,7 +47,7 @@ Component roles are strict:
 
 **PostgreSQL is the only durable store.** It holds provider profiles, capability attestations, offer templates, revocations, epoch roots, and an append-only log of accepted durable payloads. If Postgres is lost, market history is lost. Nothing durable lives anywhere else.
 
-**Redis holds only ephemeral, reconstructible state:** current dynamic terms / heartbeats (key TTL implements the freshness window directly), in-flight benchmark challenge state, rate-limit counters, and pub/sub channels for offer subscriptions. Losing Redis loses at most a few minutes of liveness data (which providers repopulate with their next heartbeat) and any in-flight benchmark runs (which providers restart). The service must start and serve reads with Redis absent (degraded: all offers report `stale`, subscriptions and new attestations unavailable).
+**Redis holds only ephemeral, reconstructible state:** current dynamic terms / heartbeats (key TTL implements the freshness window directly), in-flight benchmark challenge state, rate-limit counters, and a capped change-feed stream for offer polling. Losing Redis loses at most a few minutes of liveness data (which providers repopulate with their next heartbeat) and any in-flight benchmark runs (which providers restart). The service must start and serve reads with Redis absent (degraded: all offers report `stale`, the change feed and new attestations unavailable).
 
 **Bun service is stateless.** Any number of instances may run behind a load balancer; all coordination goes through Postgres and Redis.
 
@@ -460,20 +460,37 @@ GET /v1/offers?model=cpu/v1
 
 Semantics: numeric fields support `.min`/`.max`; `score.*` filter against the referenced **attestation's proven scores** (a `score.ram` filter matches only attestations whose `ram` score is non-null, so until the memory-hard lane is defined it excludes everything — §5.5); `price.*` filter against **current DynamicTerms**, not template bounds; `arch` exact-match. `freshness=strict` requires terms newer than 1× the provider's interval, `normal` allows 2× + 30 s grace (§10), `any` includes stale offers (template + attestation only). Default sort is `random` within the result set to avoid herding requestors onto one provider; deterministic pagination uses a cursor over a per-query seed. `sort=score.*` ranks by proven capability.
 
-Response items match `GET /v1/offers/{offerId}`. The requestor **must** verify the template and terms provider-signatures and SHOULD verify the attestation service-signature (and MAY re-verify the proof) client-side; the reference client treats unverifiable items as absent.
+Response is `{ "items": [ …offer objects… ], "cursor": "0x…", "nextCursor": "…" | null }`. Items match `GET /v1/offers/{offerId}`. `cursor` is the change-feed position corresponding to this snapshot — a client that wants to stay current polls §8.5 with it. `nextCursor` is the pagination cursor for the result set itself (null when exhausted). The requestor **must** verify the template and terms provider-signatures and SHOULD verify the attestation service-signature (and MAY re-verify the proof) client-side; the reference client treats unverifiable items as absent.
 
-### 8.5 Subscriptions
+### 8.5 Change feed (polling)
 
-`WS /v1/subscribe` — requestor opens a WebSocket, sends one JSON frame with the same filter object as §8.4. Service replies with the current matching set, then pushes incremental events from Redis pub/sub:
+There are no server-initiated connections. A requestor that wants to track a filter over time takes the `cursor` from its `GET /v1/offers` snapshot (§8.4) and polls:
 
-```json
-{ "event": "offer.updated", "offer": { …full offer object… } }
-{ "event": "offer.stale",   "offerId": "0x…" }
-{ "event": "offer.revoked", "offerId": "0x…" }
-{ "event": "offer.expired", "offerId": "0x…" }
+```
+GET /v1/offers/changes?<same filter object as §8.4>&since=<cursor>&wait=<0..25>&limit=<n>
 ```
 
-Server pings every 30 s; connections idle > 90 s are closed. Per-IP concurrent subscription cap: 20.
+Response:
+
+```json
+{
+  "events": [
+    { "event": "offer.updated", "offer": { …full offer object… } },
+    { "event": "offer.stale",   "offerId": "0x…" },
+    { "event": "offer.revoked", "offerId": "0x…" },
+    { "event": "offer.expired", "offerId": "0x…" }
+  ],
+  "cursor": "0x…",     // advance your stored cursor to this
+  "more": false        // true if events were truncated by limit; poll again immediately
+}
+```
+
+Semantics:
+
+- Events are the offer transitions since `since`, filtered server-side by the same criteria as the snapshot query. `offer.updated` carries the full object (new terms and/or template); the others carry only the `offerId`.
+- **`wait`** is an optional long-poll hint (0–25 s, default 0). With `wait=0` the server returns immediately with whatever is pending (possibly an empty `events` array) — pure short polling. With `wait>0` the server MAY hold the request until at least one matching event is available or `wait` elapses, then return. Either way the transport is a plain HTTP request the client repeats at its own cadence; long-poll only trims latency and empty responses.
+- **Cursors** are opaque, monotonic tokens over a capped feed. A `since` cursor that has aged out of the feed returns `EXPIRED_CURSOR` (409); the client recovers by re-fetching the `GET /v1/offers` snapshot and resuming from its fresh `cursor`. Clients therefore never miss state — a dropped or slow poller resyncs by snapshot, not by replaying unbounded history.
+- Polling cadence is bounded only by the query rate limit (§12); a reasonable client polls every few seconds, or uses `wait` to approximate push latency without a standing connection.
 
 ### 8.6 Epochs and proofs (§11 machinery)
 
@@ -492,7 +509,7 @@ GET /v1/offers/{offerId}/proof  → { "epoch": 421, "root": "0x…", "index": 17
 
 ## 9. Requestor flow (normative summary)
 
-1. Query `GET /v1/offers` or open a subscription with constraints (model, hardware floors, proven-score floors, price ceilings).
+1. Query `GET /v1/offers` with constraints (model, hardware floors, proven-score floors, price ceilings); to stay current, poll the change feed (§8.5) from the snapshot's `cursor`.
 2. Verify template and terms provider-signatures locally; verify the attestation service-signature; drop failures. Optionally re-verify the benchmark proof for high-value rentals.
 3. Optionally fetch and verify a merkle proof against the latest published root (mandatory once chain anchoring is live).
 4. Select top-N candidates; initiate P2P negotiation with a short timeout (2–5 s). A non-responsive candidate is dropped and the next tried — this hire-time probe, not the registry, is the authoritative liveness and hardware-still-present check.
@@ -506,7 +523,7 @@ Let `I` = provider's declared `heartbeatIntervalSec` (15–900).
 
 - Redis TTL on a terms record: `min(validUntil − now, 2·I + 30 s)`.
 - An offer is **active** if an unexpired terms record exists **and** its attestation is unexpired; otherwise `stale` (no terms) or `expired` (template or attestation expired).
-- `stale`/`expired` offers are excluded from default queries and trigger `offer.stale` / `offer.expired` events (detected by Redis keyspace-expiry notifications; if unavailable, by a 10 s sweep).
+- `stale`/`expired` offers are excluded from default queries and emit `offer.stale` / `offer.expired` events to the change feed (§8.5), detected by Redis keyspace-expiry notifications; if unavailable, by a 10 s sweep.
 - The registry never asserts liveness on its own authority: `active` means exactly "a provider-signed, unexpired terms message exists and a valid capability attestation backs it." The service cannot fabricate terms (no provider key); it signs attestations, but those are re-verifiable facts, not liveness claims.
 - No server-initiated pinging of providers for liveness. Liveness truth at hire time is established by the requestor's own negotiation probe (§9.4).
 
@@ -548,7 +565,7 @@ All counters in Redis, sliding window.
 | Benchmark challenges, per IP | 20 / day |
 | Registrations, per IP | 30 / hour |
 | Queries, per IP | 600 / minute |
-| WS subscriptions, per IP | 20 concurrent |
+| Change-feed polls, per IP | shares the 600 / minute query budget |
 
 Benchmark runs are deliberately expensive on the provider and cheap on the service (§5.4), so the abuse surface is bounded by the provider's own CPU cost; the daily caps prevent challenge-state churn. Violations return `429` with `RATE_LIMITED` and `retryAfterMs`. Limits are configuration, not protocol; they give way to stake-gating in the chain phase.
 
@@ -561,7 +578,7 @@ Benchmark runs are deliberately expensive on the provider and cheap on the servi
              "details": { "field": "prices.perCuSec" } } }
 ```
 
-Codes: `VALIDATION`, `SIG_MISMATCH`, `STALE_PAYLOAD`, `SEQ_REGRESSION`, `UNKNOWN_PROVIDER`, `UNKNOWN_OFFER`, `UNKNOWN_ATTESTATION`, `UNKNOWN_CHALLENGE`, `ATTESTATION_EXPIRED`, `ARCH_UNSUPPORTED`, `BENCH_FAILED`, `BOUNDS_VIOLATION`, `EXPIRED`, `REVOKED`, `LIMIT_EXCEEDED`, `TERMS_TOO_LONG`, `RATE_LIMITED`, `INTERNAL`. HTTP mapping: 400 validation/signature/arch/bench classes, 404 unknowns, 409 `SEQ_REGRESSION`/`STALE_PAYLOAD`, 429 rate limits, 500 internal.
+Codes: `VALIDATION`, `SIG_MISMATCH`, `STALE_PAYLOAD`, `SEQ_REGRESSION`, `UNKNOWN_PROVIDER`, `UNKNOWN_OFFER`, `UNKNOWN_ATTESTATION`, `UNKNOWN_CHALLENGE`, `ATTESTATION_EXPIRED`, `ARCH_UNSUPPORTED`, `BENCH_FAILED`, `BOUNDS_VIOLATION`, `EXPIRED`, `EXPIRED_CURSOR`, `REVOKED`, `LIMIT_EXCEEDED`, `TERMS_TOO_LONG`, `RATE_LIMITED`, `INTERNAL`. HTTP mapping: 400 validation/signature/arch/bench classes, 404 unknowns, 409 `SEQ_REGRESSION`/`STALE_PAYLOAD`/`EXPIRED_CURSOR`, 429 rate limits, 500 internal.
 
 ---
 
@@ -644,7 +661,7 @@ terms:{offerId}        → envelope JSON        PX = freshness window   (§10)
 seq:{offerId}          → last accepted seq    no expiry, rebuilt lazily
 bench:{challengeId}    → challenge state + per-lane laneIssuedAt   PX = challenge deadline
 rl:{scope}:{key}       → sliding-window counters
-ch:offers              → pub/sub channel (all offer events; server-side filter per subscription)
+stream:offers          → capped change-feed stream (XADD MAXLEN ~; all offer events, server-side filtered per poll; cursor = stream ID)
 ```
 
 ---
