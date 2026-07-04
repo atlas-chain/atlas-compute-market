@@ -10,12 +10,9 @@ echo "==> Pulling latest main"
 git pull --ff-only origin main
 
 echo "==> Building and starting the stack"
-docker compose up -d --build
+docker compose up -d --build --wait --wait-timeout 180
 
-echo "==> Waiting for the registry to come up"
-sleep 3
-
-echo "==> Health check"
+echo "==> Public health check"
 curl -fsS https://compute-market.arkiv-global.net/v1/health && echo
 
 echo "==> Deploy complete"
