@@ -188,11 +188,11 @@ The goal: turn "how fast is this machine" into a number the provider cannot infl
 The reference work function is a **sequential hash chain**. For a worker in a lane:
 
 ```
-s_0     = keccak256( seed ‖ providerId ‖ laneId ‖ uint32(workerIndex) )
+s_0     = keccak256( seed ‖ laneNonce ‖ providerId ‖ laneId ‖ uint32(workerIndex) )
 s_{k+1} = keccak256( s_k )                        for k in [0, L)
 ```
 
-- `seed` is 32 random bytes chosen by the service per challenge (precomputation-resistant).
+- `seed` is 32 random bytes chosen by the service per challenge, and `laneNonce` is 16 random bytes issued by the service **when the lane is started** (§5.3 step 2). The nonce is what makes the timing sound: without it, a provider could compute every lane after receiving the challenge and submit instantly after `/start`. Byte encoding of the `s_0` preimage: `seed` raw 32 B ‖ `laneNonce` raw 16 B ‖ `providerId` raw 20 B ‖ `laneId` ASCII ‖ `workerIndex` as big-endian uint32.
 - `L` (`chainLen`) is fixed per challenge, chosen so the single lane takes ≈ 3 s on the service's reference core.
 - **One CU = one chain step (one keccak256).** A chain of length `L` is `L` CU of work.
 
@@ -243,7 +243,7 @@ Because per-lane wall-clock must be authoritative, lanes are issued one at a tim
    }
    ```
 
-2. **Per lane, in order:** the provider calls `POST /v1/attest/{challengeId}/lane/{laneId}/start`. The service records `laneIssuedAt` (its own clock) and returns `{ ok: true }`. The provider computes the lane's chains and builds, per worker, a Merkle commitment over `C` checkpoints (checkpoint `j` = state after `j·(L/C)` steps). The provider then submits `POST /v1/attest/{challengeId}/lane/{laneId}` with a signed body carrying, per worker, the Merkle root and the final state `s_L`, plus the Fiat–Shamir openings (§5.4). The service records `laneReceivedAt`, verifies (§5.4), and computes `elapsedSeconds` as the difference of the two instants `laneReceivedAt − laneIssuedAt`, minus a one-way network-latency estimate from the preceding round-trip (bounded below by 0).
+2. **Per lane, in order:** the provider calls `POST /v1/attest/{challengeId}/lane/{laneId}/start`. The service records `laneIssuedAt` (its own clock), draws the lane's random `laneNonce` (§5.1), and returns `{ ok: true, laneNonce: "0x…" }` — chain computation cannot begin earlier because `s_0` depends on the nonce. The provider computes the lane's chains and builds, per worker, a Merkle commitment over `C` checkpoints (checkpoint `j` = state after `j·(L/C)` steps). The provider then submits `POST /v1/attest/{challengeId}/lane/{laneId}` with a signed body carrying, per worker, the Merkle root and the final state `s_L`, plus the Fiat–Shamir openings (§5.4). The service records `laneReceivedAt`, verifies (§5.4), and computes `elapsedSeconds` as the difference of the two instants `laneReceivedAt − laneIssuedAt`, minus a one-way network-latency estimate from the preceding round-trip (bounded below by 0).
 
 3. **Close.** After all four lanes verify before `deadline`, the service computes the scores, writes and signs the `CapabilityAttestation`, persists it durably, and returns it. Any lane that fails verification, misses the deadline, or exceeds the max per-lane time aborts the whole challenge with `BENCH_FAILED` (details name the lane).
 
@@ -347,7 +347,7 @@ The frequently-changing part — the dynamic offer. Stored only in Redis (latest
 }
 ```
 
-`minPricePerHour` is the price to rent the offered machine (as attested) for one hour, a non-negative decimal string denominated in `unit`, **at most 8 characters long** (e.g. `"0.000123"`, `"12345.67"`, `"0"`). The 8-character cap bounds precision and range and keeps the liveness snapshot compact (§8.5); a longer value is rejected with `VALIDATION`. There is **no setup / `start` price — it is 0 by design.** "Non-negotiable" means the registry advertises exactly this floor: a requestor pays at least it and MAY tip above. The name `minPricePerHour` (rather than `pricePerHour`) anticipates a future bidding model in which the floor becomes an auction reserve and requestors submit competing bids above it — no schema change when that lands.
+`unit` MUST be `"GLM"` — v0.2 is a single-currency market by design; any other value is rejected with `VALIDATION`. (The field exists so a future revision can widen it without a schema change; the top-level `unit` of the liveness snapshot (§8.5) relies on this uniformity.) `minPricePerHour` is the price to rent the offered machine (as attested) for one hour, a non-negative decimal string denominated in `unit`, **at most 8 characters long** (e.g. `"0.000123"`, `"12345.67"`, `"0"`). The 8-character cap bounds precision and range and keeps the liveness snapshot compact (§8.5); a longer value is rejected with `VALIDATION`. There is **no setup / `start` price — it is 0 by design.** "Non-negotiable" means the registry advertises exactly this floor: a requestor pays at least it and MAY tip above. The name `minPricePerHour` (rather than `pricePerHour`) anticipates a future bidding model in which the floor becomes an auction reserve and requestors submit competing bids above it — no schema change when that lands.
 
 Validation on write: signer matches the offer's provider; `minPricePerHour` is a non-negative decimal string of at most 8 characters; `validUntil − signedAt ≤ 3600 s`; `seq` strictly increasing. An offer with no unexpired DynamicTerms is **stale** and excluded from default query results (§10).
 
@@ -395,7 +395,7 @@ Base path `/v1`. All bodies are `application/json`. Provider write endpoints tak
 
 `POST /v1/attest/challenge` — open a benchmark run (§5.3 step 1). Body: envelope of `attest-request/v1`. Returns the service-signed `bench-challenge/v1`. Errors: `SIG_MISMATCH`, `UNKNOWN_PROVIDER`, `ARCH_UNSUPPORTED`, `RATE_LIMITED`.
 
-`POST /v1/attest/{challengeId}/lane/{laneId}/start` — mark lane start; service records `laneIssuedAt`. Returns `{ ok: true }`. Errors: `UNKNOWN_CHALLENGE`, `VALIDATION` (wrong lane order / already started), `EXPIRED` (past deadline).
+`POST /v1/attest/{challengeId}/lane/{laneId}/start` — mark lane start; service records `laneIssuedAt` and issues the lane's `laneNonce` (§5.1). Returns `{ ok: true, laneNonce: "0x…" }`. Errors: `UNKNOWN_CHALLENGE`, `VALIDATION` (wrong lane order / already started), `EXPIRED` (past deadline).
 
 `POST /v1/attest/{challengeId}/lane/{laneId}` — submit lane proof (§5.3 step 2). Returns `{ verified: true, elapsedMs, workers }`. Errors: `UNKNOWN_CHALLENGE`, `BENCH_FAILED` (verification or timing), `EXPIRED`.
 
@@ -462,7 +462,7 @@ Format is deliberately minimal — a flat columnar list of `[offerKey, minPriceP
 {
   "at": 1780560300,          // snapshot time, unix seconds
   "ttlSec": 1,               // how long this blob is valid; poll no faster than this
-  "unit": "GLM",             // currency for every minPricePerHour below
+  "unit": "GLM",             // currency for every minPricePerHour below (always "GLM" in v0.2, §6.3)
   "count": 1893,             // number of live offers
   "cols": ["offerKey", "minPricePerHour"],
   "rows": [
