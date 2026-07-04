@@ -45,7 +45,7 @@ Censorship resistance, stake-based spam control, and decentralized operation are
 
 Component roles are strict:
 
-**PostgreSQL is the only durable store.** It holds provider profiles, capability attestations, offer templates, revocations, epoch roots, and an append-only log of accepted durable payloads. If Postgres is lost, market history is lost. Nothing durable lives anywhere else.
+**PostgreSQL is the only durable store.** It holds provider profiles, capability attestations, offer templates, revocations, an append-only log of accepted durable payloads, and — once the deferred epoch phase ships (§11) — epoch roots. If Postgres is lost, market history is lost. Nothing durable lives anywhere else.
 
 **Redis holds only ephemeral, reconstructible state:** current dynamic terms / heartbeats (key TTL implements the freshness window directly), in-flight benchmark challenge state, rate-limit counters, and a capped change-feed stream for offer polling. Losing Redis loses at most a few minutes of liveness data (which providers repopulate with their next heartbeat) and any in-flight benchmark runs (which providers restart). The service must start and serve reads with Redis absent (degraded: all offers report `stale`, the change feed and new attestations unavailable).
 
@@ -174,7 +174,7 @@ Produced by the service at the end of a successful benchmark run (§5). It is th
 
 - **Attestation ID** `= keccak256(prefix || jcs(payload))`, hex with `0x`.
 - Signed by the service key. `providerId` is proven because the underlying benchmark proof was signed by that provider (§5.3).
-- **Tamper-evident, not replayable.** The service verifies the provider's proof on receipt (§5.4) and then discards it — proofs are bulky and are not persisted. A past attestation is trustworthy afterward through (a) the service signature, (b) its hash committed in an epoch merkle root (§11), so the operator cannot silently alter or backdate a score, and (c) surprise re-challenge (§5.6), which re-establishes capability on demand. A requestor wanting stronger assurance verifies the attestation's epoch-inclusion proof (§8.6) and/or relies on the hire-time probe (§9).
+- **Tamper-evident, not replayable.** The service verifies the provider's proof on receipt (§5.4) and then discards it — proofs are bulky and are not persisted. A past attestation is trustworthy afterward through (a) the service signature, (b) its hash committed in an epoch merkle root so the operator cannot silently alter or backdate a score, and (c) surprise re-challenge (§5.6), which re-establishes capability on demand. In the **first implementation only (a) and (c) apply** — the epoch commitment (b) is deferred with all of §11; while a single trusted operator runs the service, the service signature plus re-challenge are sufficient. Once epochs ship, a requestor wanting stronger assurance verifies the attestation's epoch-inclusion proof (§8.6).
 - **Expiry**: after `expiresAt` the attestation is invalid; offers referencing it become `expired` (§6.2). Default TTL 30 days; the service may also revoke an attestation early by surprise re-challenge failure (§5.6).
 
 ---
@@ -487,7 +487,7 @@ Semantics:
 - **Cursors** are opaque, monotonic tokens over a capped feed. A `since` cursor that has aged out of the feed returns `EXPIRED_CURSOR` (409); the client recovers by re-fetching the `GET /v1/offers` snapshot and resuming from its fresh `cursor`. Clients therefore never miss state — a dropped or slow poller resyncs by snapshot, not by replaying unbounded history.
 - Polling cadence is bounded only by the query rate limit (§12); a reasonable client polls every few seconds, or uses `wait` to approximate push latency without a standing connection.
 
-### 8.6 Epochs and proofs (§11 machinery)
+### 8.6 Epochs and proofs (§11 machinery) — *deferred, not in the first implementation*
 
 ```
 GET /v1/epochs/latest           → { "epoch": 421, "root": "0x…", "closedAt": "…", "count": 1893 }
@@ -498,7 +498,7 @@ GET /v1/offers/{offerId}/proof  → { "epoch": 421, "root": "0x…", "index": 17
 
 ### 8.7 Operational
 
-`GET /v1/health` → `{ "postgres": "ok", "redis": "ok|absent", "epoch": 421 }`. `GET /v1/spec` returns this document's version, the supported compute models, and the service's signing key for attestations and the transparency feed.
+`GET /v1/health` → `{ "postgres": "ok", "redis": "ok|absent" }` (the `epoch` field is added once §11 ships). `GET /v1/spec` returns this document's version, the supported compute models, and the service's signing key for attestations (and, later, the transparency feed).
 
 ---
 
@@ -526,7 +526,9 @@ Let `I` = provider's declared `heartbeatIntervalSec` (15–900).
 
 ## 11. Epochs and the commitment anchor
 
-The batching machinery runs from day one, even though nothing is on a chain yet, so the mechanism is exercised and history is auditable.
+> **Not in the first implementation — deferred.** Everything in this section (the epoch batching, the merkle tree, the transparency feed, the `/v1/epochs/*` and `/v1/offers/{offerId}/proof` endpoints, and the `epochs` table) is design for a later phase and is intentionally left out of the first cut. It is kept here so the shape is fixed before it is built. Until it ships, `payload_log.epoch` is unused (store `0` or make it nullable), and attestation integrity rests on the service signature alone (§4.3) — acceptable while a single trusted operator runs the service; the epoch commitment strengthens it later without a client-visible change.
+
+Once built, the batching machinery runs even though nothing is on a chain yet, so the mechanism is exercised and history is auditable.
 
 **Epoch:** fixed 10-minute windows (epoch number = `floor(unixMinutes / 10)`). At close, the service collects the hashes of all durable objects accepted in that window — provider profiles, capability attestations, offer templates, revocations (not dynamic terms, which are ephemeral by design) — sorts them ascending, and builds a binary merkle tree (duplicate-last for odd counts; leaf = object hash; node = `keccak256(left‖right)`). Empty epochs commit the zero root.
 
@@ -589,7 +591,7 @@ create table payload_log (              -- append-only, every accepted durable o
   payload     jsonb not null,           -- canonical form
   signature   bytea not null,           -- provider or service signature
   received_at timestamptz not null default now(),
-  epoch       bigint not null
+  epoch       bigint                     -- nullable; unused until epochs ship (§11, deferred)
 );
 
 create table providers (
@@ -639,12 +641,13 @@ create index on offers (model, arch, score_full, core_count) where revoked_at is
 create index on offers (provider_id);
 create index on offers (expires_at);
 
+-- deferred with §11; not created in the first implementation:
 create table epochs (
   epoch      bigint primary key,
   root       bytea not null,
   leaf_count int not null,
   closed_at  timestamptz not null,
-  anchor_ref text                         -- feed URL now; tx hash later
+  anchor_ref text                         -- feed URL later; tx hash later still
 );
 ```
 
