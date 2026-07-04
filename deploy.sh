@@ -9,6 +9,9 @@ cd "$(dirname "$0")"
 echo "==> Pulling latest main"
 git pull --ff-only origin main
 
+export GIT_COMMIT="$(git rev-parse HEAD)"
+export GIT_COMMIT_DATE="$(git show -s --format=%cI HEAD)"
+
 echo "==> Building and starting the stack"
 docker compose up -d --build --wait --wait-timeout 180
 

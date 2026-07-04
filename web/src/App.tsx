@@ -1,6 +1,5 @@
 import { api } from "./api";
 import { usePoll } from "./usePoll";
-import { shortHex } from "./format";
 import { Tiles } from "./Tiles";
 import { ProvidersTable } from "./ProvidersTable";
 import { OffersTable } from "./OffersTable";
@@ -12,6 +11,8 @@ export default function App() {
   const { data: stats, error: statsError } = usePoll(() => api.stats(), 5_000);
 
   const up = health !== null && !healthError && health.postgres === "ok";
+  const commit = import.meta.env.VITE_GIT_COMMIT ?? "unknown";
+  const commitDate = import.meta.env.VITE_GIT_COMMIT_DATE ?? "unknown";
   return (
     <>
       <header id="topbar">
@@ -25,14 +26,8 @@ export default function App() {
           <NavLink to="/providers">Providers</NavLink>
           <NavLink to="/offers">Offers</NavLink>
         </nav>
-        {spec && <span className="chip">spec {spec.version}</span>}
-        {spec && <span className="chip">{spec.models.join(" · ")}</span>}
-        {spec && <span className="chip">unit {spec.unit}</span>}
-        {spec && (
-          <span className="chip" title={spec.serviceKey}>
-            attester {shortHex(spec.serviceKey, 8, 4)}
-          </span>
-        )}
+        <span className="chip" title={commit}>commit {commit.slice(0, 7)}</span>
+        <span className="chip">committed {commitDate.slice(0, 10)}</span>
         <span className="head-right">
           <span className="conn">
             <span className={`conn-dot ${up ? "on" : ""}`} />

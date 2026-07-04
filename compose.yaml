@@ -10,7 +10,11 @@
 # `docker compose -f compose.dev.yaml up -d` and run the app with `bun start`.
 services:
   registry:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_COMMIT: "${GIT_COMMIT:-unknown}"
+        GIT_COMMIT_DATE: "${GIT_COMMIT_DATE:-unknown}"
     image: atlas-compute-market
     container_name: atlas-compute-market
     environment:

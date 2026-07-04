@@ -9,6 +9,10 @@ RUN bun install --frozen-lockfile --production
 # dashboard bundle (served by the registry on non-/v1 paths)
 FROM oven/bun:1.3.14-alpine AS web
 WORKDIR /web
+ARG GIT_COMMIT=unknown
+ARG GIT_COMMIT_DATE=unknown
+ENV VITE_GIT_COMMIT=$GIT_COMMIT \
+    VITE_GIT_COMMIT_DATE=$GIT_COMMIT_DATE
 COPY web/package.json web/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY web ./
