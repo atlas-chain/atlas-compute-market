@@ -23,6 +23,7 @@ export type ErrorCode =
 const STATUS: Record<ErrorCode, number> = {
   VALIDATION: 400,
   SIG_MISMATCH: 400,
+  ATTESTATION_EXPIRED: 400,
   ARCH_UNSUPPORTED: 400,
   BENCH_FAILED: 400,
   EXPIRED: 400,

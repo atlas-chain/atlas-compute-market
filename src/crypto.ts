@@ -33,7 +33,8 @@ export function addressFromPrivateKey(priv: Uint8Array): string {
 export function signPayload(payload: unknown, priv: Uint8Array): string {
   const digest = payloadDigest(payload);
   // noble v2 "recovered" format puts the recovery byte FIRST; spec wants r‖s‖v.
-  const sig = secp256k1.sign(digest, priv, { prehash: false, format: "recovered" });
+  // (options cast: noble's published types lag the runtime `format` option)
+  const sig = secp256k1.sign(digest, priv, { prehash: false, format: "recovered" } as never) as Uint8Array;
   const rsv = concatBytes(sig.slice(1), sig.slice(0, 1));
   return "0x" + bytesToHex(rsv);
 }
@@ -59,7 +60,7 @@ export function recoverSignerOfDigest(digest: Uint8Array, signatureHex: string):
     const compressed = secp256k1.recoverPublicKey(nobleSig, digest, {
       prehash: false,
       format: "recovered",
-    });
+    } as never) as Uint8Array;
     const uncompressed = secp256k1.Point.fromBytes(compressed).toBytes(false);
     return "0x" + bytesToHex(keccak_256(uncompressed.slice(1)).slice(12));
   } catch {

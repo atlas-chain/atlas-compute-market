@@ -23,6 +23,33 @@ Offers are organized by **compute model** (`cpu/v1` today, `gpu/v1` reserved) so
 
 See [`docs/registry-spec.md`](docs/registry-spec.md) for the full service specification (v0.2-draft).
 
+## Running (first pass)
+
+```sh
+bun install
+docker compose up -d      # postgres + redis (compose.yaml)
+bun start                 # registry on :8080 (dev service key unless ATLAS_SERVICE_PRIVKEY is set)
+bun test                  # unit tests; plus dockerized end-to-end when docker is available
+```
+
+Exercise the full provider flow (register → benchmark → attestation → offer → heartbeat) with the reference client:
+
+```sh
+PROVIDER_PRIVKEY=0x<32-byte-hex> bun run scripts/bench-client.ts
+```
+
+Key environment variables: `PORT`, `DATABASE_URL`, `REDIS_URL`, `ATLAS_SERVICE_PRIVKEY`, and benchmark tuning `ATLAS_CHAIN_LEN` / `ATLAS_CHECKPOINTS` / `ATLAS_SAMPLES` (see `src/config.ts`).
+
+## Layout
+
+| Path | What |
+|---|---|
+| `src/jcs.ts`, `src/crypto.ts` | RFC 8785 canonicalization; keccak/secp256k1 identity + signatures (§3) |
+| `src/bench.ts` | Benchmark work function, merkle commitment, prover + verifier (§5) — the contract for the Rust provider agent |
+| `src/handlers/` | Providers, attestation flow, offers/terms/revoke, query, liveness snapshot (§8) |
+| `src/db.ts`, `src/redis.ts` | Postgres schema (§14) and degraded-mode-safe Redis wrapper |
+| `scripts/bench-client.ts` | Reference provider agent |
+
 ## Status
 
-Pre-implementation. The specification is under review; the benchmark reference vectors and the canonicalization + signature module are the next deliverable.
+First implementation pass: identity/signatures, the CPU benchmark attestation flow, offers, dynamic terms (heartbeat + price), query, and the compact liveness snapshot. Deferred by design: epochs/transparency feed (§11), the change feed, the RAM lane (§5.5), surprise re-challenges, and benchmark-proof hardening (interactive sampling).
