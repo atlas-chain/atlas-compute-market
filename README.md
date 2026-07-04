@@ -23,14 +23,27 @@ Offers are organized by **compute model** (`cpu/v1` today, `gpu/v1` reserved) so
 
 See [`docs/registry-spec.md`](docs/registry-spec.md) for the full service specification (v0.2-draft).
 
-## Running (first pass)
+## Running
+
+Local development — Postgres + Redis in containers, the registry on the host:
 
 ```sh
 bun install
-docker compose up -d      # postgres + redis (compose.yaml)
-bun start                 # registry on :8080 (dev service key unless ATLAS_SERVICE_PRIVKEY is set)
-bun test                  # unit tests; plus dockerized end-to-end when docker is available
+docker compose -f compose.dev.yaml up -d   # postgres + redis on host ports
+bun start                                  # registry on :8080 (dev service key unless ATLAS_SERVICE_PRIVKEY is set)
+bun test                                   # unit tests; plus dockerized end-to-end when docker is available
 ```
+
+Full stack — registry + Postgres + Redis, all in containers (this is how the
+service runs at `https://compute-market.arkiv-global.net`):
+
+```sh
+cp .env.example .env      # then set ATLAS_SERVICE_PRIVKEY and POSTGRES_PASSWORD
+docker compose up -d --build
+```
+
+The default `compose.yaml` publishes only the registry, on `127.0.0.1:28886`, for a
+reverse proxy to terminate TLS in front of it.
 
 Exercise the full provider flow (register → benchmark → attestation → offer → heartbeat) with the reference client:
 

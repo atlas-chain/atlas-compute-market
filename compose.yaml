@@ -1,21 +1,59 @@
-# Dev dependencies for the registry service (spec §2): the only durable store
-# and the ephemeral state store. `docker compose up -d`, then `bun start`.
+# Production stack for the Atlas Compute Market registry — the default compose.
+# Everything runs in containers on an internal network; only the registry is
+# published, on the loopback interface, for the host nginx to reverse-proxy
+# (https://compute-market.arkiv-global.net). Bring up with:
+#
+#   docker compose up -d --build
+#
+# Secrets (ATLAS_SERVICE_PRIVKEY, POSTGRES_PASSWORD) come from .env (gitignored;
+# see .env.example). For local dev with just Postgres + Redis, use
+# `docker compose -f compose.dev.yaml up -d` and run the app with `bun start`.
 services:
+  registry:
+    build: .
+    image: atlas-compute-market
+    container_name: atlas-compute-market
+    environment:
+      PORT: "8080"
+      DATABASE_URL: "postgres://atlas:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/atlas"
+      REDIS_URL: "redis://redis:6379"
+      ATLAS_SERVICE_PRIVKEY: "${ATLAS_SERVICE_PRIVKEY:?set ATLAS_SERVICE_PRIVKEY in .env}"
+    ports:
+      # loopback-only; the host nginx terminates TLS and proxies here.
+      - "127.0.0.1:28886:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://localhost:8080/v1/health');process.exit(r.ok?0:1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
+    container_name: atlas-compute-market-postgres
     environment:
       POSTGRES_USER: atlas
-      POSTGRES_PASSWORD: atlas
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
       POSTGRES_DB: atlas
-    ports:
-      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atlas -d atlas"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    container_name: atlas-compute-market-redis
+    restart: unless-stopped
 
 volumes:
   pgdata:

@@ -22,8 +22,11 @@ export const config = {
   specVersion: "0.2-draft",
   unit: "GLM", // single-currency market (§6.3)
 
-  // benchmark parameters (§5; tunable, pinned by reference vectors later)
-  chainLen: num("ATLAS_CHAIN_LEN", 1_000_000),
+  // benchmark parameters (§5; tunable, pinned by reference vectors later).
+  // chainLen MUST be divisible by checkpoints (§5.4: checkpoint j = state after
+  // j·(L/C) steps). Default L = 1024·1024 keeps the ≈3 s lane target while C
+  // stays at the spec's soundness parameter of 1024.
+  chainLen: num("ATLAS_CHAIN_LEN", 1_048_576),
   checkpoints: num("ATLAS_CHECKPOINTS", 1024),
   samples: num("ATLAS_SAMPLES", 16),
   challengeTtlMs: num("ATLAS_CHALLENGE_TTL_MS", 5 * 60_000),
@@ -54,5 +57,13 @@ export const config = {
     livenessPerIp: [60, 60_000] as const,
   },
 };
+
+// Fail fast on an inconsistent benchmark config rather than at lane-compute
+// time inside a provider's flow (§5.4 requires L divisible by C).
+if (config.chainLen % config.checkpoints !== 0) {
+  throw new Error(
+    `invalid benchmark config: ATLAS_CHAIN_LEN (${config.chainLen}) must be divisible by ATLAS_CHECKPOINTS (${config.checkpoints})`,
+  );
+}
 
 export type Config = typeof config;
