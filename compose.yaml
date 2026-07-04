@@ -18,6 +18,8 @@ services:
       DATABASE_URL: "postgres://atlas:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/atlas"
       REDIS_URL: "redis://redis:6379"
       ATLAS_SERVICE_PRIVKEY: "${ATLAS_SERVICE_PRIVKEY:?set ATLAS_SERVICE_PRIVKEY in .env}"
+      # dev/testing only — dummy providers with fabricated attestations (see .env.example)
+      ATLAS_DEV_SEED: "${ATLAS_DEV_SEED:-0}"
     ports:
       # loopback-only; the host nginx terminates TLS and proxies here.
       - "127.0.0.1:28886:8080"

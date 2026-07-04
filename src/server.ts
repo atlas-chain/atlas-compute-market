@@ -45,6 +45,11 @@ export async function startServer(port = config.port): Promise<Server<unknown>> 
     console.warn("⚠ ATLAS_SERVICE_PRIVKEY not set — using the well-known DEV key. Do not run in production.");
   }
 
+  if (config.devSeed > 0) {
+    const { seedDevMarket } = await import("./dev-seed.ts");
+    await seedDevMarket(config.devSeed);
+  }
+
   const server = Bun.serve({
     port,
     routes: {
