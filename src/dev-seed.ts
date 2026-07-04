@@ -56,7 +56,9 @@ function persona(i: number): Persona {
     ramGib,
     cpuModel,
     basePrice: 0.01 + 0.005 * coreCount + (i % 7) * 0.01,
-    heartbeatIntervalSec: 15 + (i % 4) * 15,
+    // DynamicTerms expire after 2I + 30s, so I=15 gives dev offers a
+    // predictable 60-second stale threshold.
+    heartbeatIntervalSec: 15,
     behavior: behaviors[i % behaviors.length]!,
   };
 }
@@ -192,18 +194,34 @@ export async function seedDevMarket(n: number): Promise<() => void> {
   const now = Date.now();
   for (const p of personas) await ensureProvider(p, now);
 
-  // seq must only ever grow, including across restarts — derive from wall clock
+  // seq must only ever grow, including across restarts — derive from wall clock.
+  // Schedule providers independently so a large dev market does not produce a
+  // synchronized Redis burst every tick.
   let seq = Math.floor(Date.now() / 1000);
-  const tick = async () => {
-    seq += 1;
-    for (const p of personas) {
-      if (p.behavior === "offline") continue;
-      if (p.behavior === "flaky" && Math.random() < 0.5) continue;
-      await heartbeat(p, seq).catch((e) => console.error("[dev-seed] heartbeat failed:", e));
-    }
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  let stopped = false;
+
+  const schedule = (p: Persona, delayMs: number) => {
+    const timer = setTimeout(async () => {
+      timers.delete(timer);
+      if (stopped) return;
+      if (p.behavior !== "flaky" || Math.random() >= 0.5) {
+        seq += 1;
+        await heartbeat(p, seq).catch((e) => console.error("[dev-seed] heartbeat failed:", e));
+      }
+      if (!stopped) schedule(p, 20_000 + Math.random() * 5_000);
+    }, delayMs);
+    timer.unref?.();
+    timers.add(timer);
   };
-  await tick();
-  const timer = setInterval(tick, 15_000);
-  timer.unref?.();
-  return () => clearInterval(timer);
+
+  for (const p of personas) {
+    if (p.behavior !== "offline") schedule(p, Math.random() * 25_000);
+  }
+
+  return () => {
+    stopped = true;
+    for (const timer of timers) clearTimeout(timer);
+    timers.clear();
+  };
 }
