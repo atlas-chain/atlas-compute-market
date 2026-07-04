@@ -7,7 +7,7 @@ import { err } from "../errors.ts";
 import { keccak256, bytesToHex, randomBytes } from "../crypto.ts";
 import { json, clientIp, bufToHex } from "../http.ts";
 import { offerStatus, type OfferRow } from "./offers.ts";
-import { envelopeOut } from "../http.ts";
+import { envelopeOut, fromJsonb } from "../http.ts";
 
 type Freshness = "strict" | "normal" | "any";
 const SORTS = ["price", "score.full", "score.single", "score.ramBandwidth", "score.dagHash", "random"] as const;
@@ -157,8 +157,8 @@ export async function getOffers(req: Request, server: Server<unknown>): Promise<
       const terms = termsMap.get(id) ?? null;
       return {
         offerId: id,
-        template: envelopeOut(row.template, bufToHex(row.tpl_sig), row.created_at),
-        attestation: envelopeOut(row.att_payload, bufToHex(row.att_sig), row.att_received),
+        template: envelopeOut(fromJsonb(row.template), bufToHex(row.tpl_sig), row.created_at),
+        attestation: envelopeOut(fromJsonb(row.att_payload), bufToHex(row.att_sig), row.att_received),
         terms: terms ? { envelope: terms.envelope, meta: { hash: null, receivedAt: terms.receivedAt } } : null,
         status: offerStatus(row, terms !== null, now),
       };

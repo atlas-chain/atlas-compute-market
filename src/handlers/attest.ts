@@ -14,7 +14,7 @@ import {
   signPayload,
 } from "../crypto.ts";
 import { laneScore, verifyLane, type LaneParams } from "../bench.ts";
-import { envelopeOut, json, readEnvelope, clientIp, hexToBuf, bufToHex, type RouteReq } from "../http.ts";
+import { envelopeOut, fromJsonb, json, readEnvelope, clientIp, hexToBuf, bufToHex, type RouteReq } from "../http.ts";
 
 const LANE_ORDER = ["single", "quad", "eight", "full"] as const;
 type LaneId = (typeof LANE_ORDER)[number];
@@ -260,5 +260,5 @@ export async function getAttestation(req: RouteReq): Promise<Response> {
     select payload, signature, received_at from payload_log
     where hash = ${hexToBuf(id)} and type = 'attest/cpu/v1'`;
   if (rows.length === 0) throw err("UNKNOWN_ATTESTATION", "attestation not found");
-  return json(envelopeOut(rows[0].payload, bufToHex(rows[0].signature), rows[0].received_at));
+  return json(envelopeOut(fromJsonb(rows[0].payload), bufToHex(rows[0].signature), rows[0].received_at));
 }

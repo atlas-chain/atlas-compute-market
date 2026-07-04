@@ -63,6 +63,11 @@ export function clientIp(req: Request, server: Server<unknown>): string {
   return server.requestIP(req)?.address ?? "unknown";
 }
 
+/** Bun's SQL driver returns jsonb columns as strings — normalize on read. */
+export function fromJsonb(v: unknown): Record<string, unknown> {
+  return typeof v === "string" ? JSON.parse(v) : (v as Record<string, unknown>);
+}
+
 export function hexToBuf(hash0x: string): Uint8Array {
   return Uint8Array.from(Buffer.from(hash0x.slice(2), "hex"));
 }

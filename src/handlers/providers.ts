@@ -5,7 +5,7 @@ import { redis } from "../redis.ts";
 import { config } from "../config.ts";
 import { err } from "../errors.ts";
 import { parseIso } from "../validate.ts";
-import { envelopeOut, json, readEnvelope, clientIp, hexToBuf, bufToHex, type RouteReq } from "../http.ts";
+import { envelopeOut, fromJsonb, json, readEnvelope, clientIp, hexToBuf, bufToHex, type RouteReq } from "../http.ts";
 
 function validateProfile(p: Record<string, unknown>): void {
   const signedAt = parseIso(p.signedAt);
@@ -92,7 +92,7 @@ export async function getProvider(req: RouteReq): Promise<Response> {
 
   const r = rows[0];
   return json({
-    ...envelopeOut(r.payload, bufToHex(r.signature), r.received_at),
+    ...envelopeOut(fromJsonb(r.payload), bufToHex(r.signature), r.received_at),
     attestation:
       att.length > 0
         ? {

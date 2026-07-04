@@ -5,7 +5,7 @@ import { redis } from "../redis.ts";
 import { config } from "../config.ts";
 import { err } from "../errors.ts";
 import { parseIso, toIso, isValidPrice, isPlainObject, isHash } from "../validate.ts";
-import { envelopeOut, json, readEnvelope, clientIp, hexToBuf, bufToHex, type RouteReq } from "../http.ts";
+import { envelopeOut, fromJsonb, json, readEnvelope, clientIp, hexToBuf, bufToHex, type RouteReq } from "../http.ts";
 
 // ---------------------------------------------------------------- submit
 
@@ -140,8 +140,8 @@ export async function offerResponse(row: OfferRow, nowMs: number) {
   const terms = await redis.getTerms(offerId);
   return {
     offerId,
-    template: envelopeOut(row.template, bufToHex(row.tpl_sig), row.created_at),
-    attestation: envelopeOut(row.att_payload, bufToHex(row.att_sig), row.att_received),
+    template: envelopeOut(fromJsonb(row.template), bufToHex(row.tpl_sig), row.created_at),
+    attestation: envelopeOut(fromJsonb(row.att_payload), bufToHex(row.att_sig), row.att_received),
     terms: terms
       ? {
           envelope: terms.envelope,
