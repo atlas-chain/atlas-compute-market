@@ -4,6 +4,7 @@ bun.lockb
 .env.*
 !.env.example
 dist/
+agent/target/
 *.log
 .DS_Store
 coverage/
