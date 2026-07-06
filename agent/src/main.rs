@@ -20,17 +20,21 @@ const USAGE: &str = "\
 atlas-agent — Atlas Compute Market provider agent
 
 USAGE:
-  atlas-agent [--once] [--force-bench]
+  atlas-agent [--once] [--force-bench] [--exchange DIR]
   atlas-agent --gen-key
 
 FLAGS:
-  --once         run the full flow, send one heartbeat, exit
-  --force-bench  re-run the benchmark even when a live attestation exists
-  --gen-key      generate a provider key, print it with its address, exit
+  --once           run the full flow, send one heartbeat, exit
+  --force-bench    re-run the benchmark even when a live attestation exists
+  --exchange DIR   no network: exchange req-*/resp-*.json files in DIR with a
+                   host-side relay (agent/manager.py) instead of using BASE_URL
+  --gen-key        generate a provider key, print it with its address, exit
 
 ENVIRONMENT:
-  BASE_URL            registry URL           (default http://localhost:8080)
-  PROVIDER_PRIVKEY    0x-hex secp256k1 key   (required)
+  BASE_URL            registry URL           (default http://localhost:8080; unused with --exchange)
+  PROVIDER_PRIVKEY    0x-hex secp256k1 key   (required unless a key file is used)
+  KEY_FILE            path to load/generate the key when PROVIDER_PRIVKEY is
+                      unset (default with --exchange: DIR/provider.key)
   CORE_COUNT          declared cores         (default: available parallelism)
   RAM_GIB             declared RAM in GiB    (default: /proc/meminfo)
   CPU_MODEL           declared CPU model     (default: /proc/cpuinfo)
@@ -49,15 +53,28 @@ fn main() -> ExitCode {
     if args.iter().any(|a| a == "--gen-key") {
         return gen_key();
     }
-    for a in &args {
-        if a != "--once" && a != "--force-bench" {
-            eprintln!("unknown flag {a}\n\n{USAGE}");
-            return ExitCode::from(2);
+    let mut once = false;
+    let mut force_bench = false;
+    let mut exchange: Option<String> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--once" => once = true,
+            "--force-bench" => force_bench = true,
+            "--exchange" => match it.next() {
+                Some(dir) => exchange = Some(dir.clone()),
+                None => {
+                    eprintln!("--exchange requires a directory\n\n{USAGE}");
+                    return ExitCode::from(2);
+                }
+            },
+            _ => {
+                eprintln!("unknown flag {a}\n\n{USAGE}");
+                return ExitCode::from(2);
+            }
         }
     }
-    let once = args.iter().any(|a| a == "--once");
-    let force_bench = args.iter().any(|a| a == "--force-bench");
-    match run(once, force_bench) {
+    match run(once, force_bench, exchange) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("fatal: {e}");
@@ -67,26 +84,79 @@ fn main() -> ExitCode {
 }
 
 fn gen_key() -> ExitCode {
-    loop {
-        let mut raw = [0u8; 32];
-        if getrandom::getrandom(&mut raw).is_err() {
-            eprintln!("fatal: OS randomness unavailable");
-            return ExitCode::FAILURE;
-        }
-        // rejection-sample the (astronomically unlikely) out-of-range scalar
-        if let Ok(key) = k256::ecdsa::SigningKey::from_slice(&raw) {
+    match generate_key() {
+        Ok((raw, key)) => {
             println!("PROVIDER_PRIVKEY=0x{}", hex::encode(raw));
             println!("providerId={}", address_from_key(&key));
-            return ExitCode::SUCCESS;
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("fatal: {e}");
+            ExitCode::FAILURE
         }
     }
 }
 
-fn run(once: bool, force_bench: bool) -> Result<(), String> {
+fn generate_key() -> Result<([u8; 32], k256::ecdsa::SigningKey), String> {
+    loop {
+        let mut raw = [0u8; 32];
+        getrandom::getrandom(&mut raw).map_err(|_| "OS randomness unavailable".to_string())?;
+        // rejection-sample the (astronomically unlikely) out-of-range scalar
+        if let Ok(key) = k256::ecdsa::SigningKey::from_slice(&raw) {
+            return Ok((raw, key));
+        }
+    }
+}
+
+/// Provider key: PROVIDER_PRIVKEY env wins; otherwise a key file (KEY_FILE,
+/// defaulting to <exchange>/provider.key in --exchange mode) is loaded, or
+/// generated and persisted on first run so identity survives restarts.
+fn load_key(exchange: Option<&str>) -> Result<k256::ecdsa::SigningKey, String> {
+    if let Ok(h) = std::env::var("PROVIDER_PRIVKEY") {
+        if !h.trim().is_empty() {
+            return parse_privkey(&h);
+        }
+    }
+    let key_file = std::env::var("KEY_FILE")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| exchange.map(|d| std::path::Path::new(d).join("provider.key")));
+    let Some(path) = key_file else {
+        return Err("PROVIDER_PRIVKEY required (0x-prefixed 32-byte hex); see --help".to_string());
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(hex_str) => parse_privkey(&hex_str).map_err(|e| format!("{}: {e}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let (raw, key) = generate_key()?;
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+            }
+            write_key_file(&path, &format!("0x{}\n", hex::encode(raw)))
+                .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+            println!("generated new provider key at {}", path.display());
+            Ok(key)
+        }
+        Err(e) => Err(format!("cannot read {}: {e}", path.display())),
+    }
+}
+
+#[cfg(unix)]
+fn write_key_file(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?;
+    f.write_all(contents.as_bytes())
+}
+
+#[cfg(not(unix))]
+fn write_key_file(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    std::fs::write(path, contents)
+}
+
+fn run(once: bool, force_bench: bool, exchange: Option<String>) -> Result<(), String> {
     let base = env_or("BASE_URL", "http://localhost:8080");
-    let priv_hex =
-        std::env::var("PROVIDER_PRIVKEY").map_err(|_| "PROVIDER_PRIVKEY required (0x-prefixed 32-byte hex); see --help".to_string())?;
-    let key = parse_privkey(&priv_hex)?;
+    let key = load_key(exchange.as_deref())?;
     let provider_id = address_from_key(&key);
 
     let core_count: u32 = env_parse("CORE_COUNT", default_cores())?.min(256);
@@ -101,8 +171,16 @@ fn run(once: bool, force_bench: bool) -> Result<(), String> {
         .collect();
     let heartbeat_sec: u64 = env_parse("HEARTBEAT_SEC", 60u64)?.clamp(15, 900);
 
-    let api = Api::new(&base, key);
-    println!("provider {provider_id} → {base}");
+    let api = match &exchange {
+        Some(dir) => {
+            println!("provider {provider_id} → file relay at {dir} (no network)");
+            Api::over_files(std::path::Path::new(dir), key)?
+        }
+        None => {
+            println!("provider {provider_id} → {base}");
+            Api::new(&base, key)
+        }
+    };
     println!(
         "declaring coreCount={core_count} ramGib={ram_gib} cpuModel={}",
         cpu_model.as_deref().unwrap_or("(none)")

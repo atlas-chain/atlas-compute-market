@@ -34,3 +34,34 @@ docker run --rm -e BASE_URL=… -e PROVIDER_PRIVKEY=… atlas-agent
 The image is self-contained (static musl binary, bundled TLS roots): the
 container needs no network access beyond `BASE_URL`, no volumes, and detects
 coreCount / RAM / CPU model from `/proc` (override via env).
+
+## Offline container + manager (no network in docker)
+
+For deployments where the container must not touch the network at all, the
+agent supports a file-based transport (`--exchange DIR`): every registry
+round-trip is written as `req-*.json` into the exchange directory and the
+answer is read back from `resp-*.json` (protocol: `src/file_transport.rs`).
+`manager.py` is the host-side counterpart — it spawns the container with
+`--network none` and hard CPU/RAM limits, and relays the request files to the
+registry over HTTPS:
+
+```sh
+python3 agent/manager.py --cpus 4 --memory-gib 8        # registers to
+                                                        # compute-market.arkiv-global.net
+python3 agent/manager.py --base-url http://localhost:8080 --once
+```
+
+Needs only `python3` (stdlib) and `docker`; it builds the image on first run
+(`--build` to force a rebuild). `--cpus` / `--memory-gib` become both the
+docker limits and the declared `CORE_COUNT` / `RAM_GIB`, so the benchmarked
+capability matches what the container is actually allowed to use. The
+provider key is generated *inside* the container on first run and persisted
+as `provider.key` in `--state-dir` (default `~/.atlas-provider`), so identity
+and attestation reuse survive restarts. `--once` / `--force-bench` /
+`--price` / `--display-name` / `--heartbeat-sec` pass through to the agent;
+without `--once` the manager keeps relaying heartbeats until Ctrl-C.
+
+Trust model: the relay is as trusted as the network path in HTTP mode —
+every payload is signed inside the container, so a hostile relay can at
+worst deny service or slow the (server-timed) benchmark, never forge
+provider messages.
