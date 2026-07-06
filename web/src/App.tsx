@@ -7,6 +7,7 @@ import { OffersTable } from "./OffersTable";
 import { DemandTable } from "./DemandTable";
 import { RequestorCard } from "./RequestorCard";
 import { StatsPage } from "./StatsPage";
+import { JoinPage } from "./JoinPage";
 import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 
 export default function App() {
@@ -31,6 +32,7 @@ export default function App() {
           <NavLink to="/offers">Offers</NavLink>
           <NavLink to="/stats">Stats</NavLink>
           {stats?.demandSim && <NavLink to="/demand">Demand (sim)</NavLink>}
+          <NavLink to="/join" className="join-cta">Join →</NavLink>
         </nav>
         <span className="chip" title={commit}>commit {commit.slice(0, 7)}</span>
         <span className="chip">committed {commitDate.slice(0, 10)}</span>
@@ -50,6 +52,7 @@ export default function App() {
           <Route path="/providers/:id" element={<ProviderCard stats={stats} unit={spec?.unit ?? "GLM"} />} />
           <Route path="/offers" element={<OffersTable unit={spec?.unit ?? "GLM"} />} />
           <Route path="/stats" element={<StatsPage unit={spec?.unit ?? "GLM"} />} />
+          <Route path="/join" element={<JoinPage />} />
           <Route path="/demand" element={<DemandTable demand={stats?.demandSim ?? null} unit={spec?.unit ?? "GLM"} />} />
           <Route path="/requestors/:id" element={<RequestorCard demand={stats?.demandSim ?? null} unit={spec?.unit ?? "GLM"} />} />
           <Route path="*" element={<Navigate to="/providers" replace />} />

@@ -76,6 +76,16 @@ protocol as `manager.py`). The VM has **no network interface at all** — the
 image must declare `VOLUME /exchange` (this Dockerfile does), which the
 runtime 9p-mounts from the host.
 
+The easiest way to run all of this is the market's one-line join, which
+downloads a prebuilt static `atlas-vm-driver` and runs it (see the site's
+**Join** page):
+
+```sh
+curl -fsSL https://compute-market.arkiv-global.net/join.sh | sh
+```
+
+The rest of this section covers building/running the driver yourself.
+
 The driver is **self-contained**: with no `--runtime`/`--image` it downloads
 the pinned ya-runtime-vm release and the published provider image (verified by
 its SHA3-224 content hash) into a cache dir, then registers. All you need is

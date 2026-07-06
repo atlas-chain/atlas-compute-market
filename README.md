@@ -55,6 +55,26 @@ Key environment variables: `PORT`, `DATABASE_URL`, `REDIS_URL`, `ATLAS_SERVICE_P
 
 The registry continuously samples its market aggregates into a durable Postgres time-series (`market_snapshots`, spec §8.7/§14) served by `GET /v1/stats/history?range=1h|6h|24h|7d|30d`; the dashboard's **Stats** page charts it (providers online/busy, offers, cores, RAM, price, and — on sim deployments — settled volume and jobs/hour).
 
+## Join as a provider
+
+The dashboard's **Join** page shows a one-line command that turns any Linux
+x86-64 host with KVM into a provider:
+
+```sh
+curl -fsSL https://compute-market.arkiv-global.net/join.sh | sh
+```
+
+`join.sh` (served from `web/public/join.sh`) downloads the self-contained
+provider agent — a static `atlas-vm-driver` binary the registry hosts at
+`/dl/atlas-vm-driver-x86_64-linux` (built into the Docker image from
+`agent/vm-driver`, with a `.sha256` the script verifies) — and runs it. The
+agent boots a network-less Golem VM (ya-runtime-vm), fetches its runtime and
+image once, benchmarks the host, registers a signed offer, and heartbeats
+until stopped. `CPU_CORES` / `MEM_GIB` / `DISPLAY_NAME` env vars tune what is
+offered; no Docker, yagna, or Rust toolchain is required on the joiner. See
+[`agent/README.md`](agent/README.md) for the agent internals and a Docker
+alternative (`agent/manager.py`).
+
 ## Dashboard
 
 `web/` is a Vite + React market dashboard (stats tiles + a network-statistics chart page, provider directory with per-provider cards, offer browser) that the registry serves on all non-`/v1` paths when `web/dist` exists; the Docker image builds it in. For frontend development:
@@ -84,6 +104,7 @@ A provider that accepts a job off-registry can take itself out of default search
 | `src/handlers/` | Providers, attestation flow, offers/terms/revoke, query, liveness snapshot (§8) |
 | `src/db.ts`, `src/redis.ts` | Postgres schema (§14) and degraded-mode-safe Redis wrapper |
 | `scripts/bench-client.ts` | Reference provider agent |
+| `agent/`, `agent/vm-driver/` | Rust provider agent + the self-contained VM joiner served by `/join.sh` |
 
 ## Status
 
