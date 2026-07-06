@@ -24,10 +24,14 @@
  *   - respects rate limits (honors retryAfterMs on 429);
  *   - staggered, jittered scheduling — no synchronized query bursts.
  *
- * State is in-memory only (the simulator lives in the service process) and
- * surfaces through GET /v1/stats as `demandSim` when the flag is set.
+ * Live state is in-memory (the simulator lives in the service process) and
+ * surfaces through GET /v1/stats as `demandSim` when the flag is set. Every
+ * COMPLETED job is additionally settled into the `dev_sim_jobs` Postgres
+ * ledger, so spending/earnings/job statistics survive restarts and are
+ * queryable (GET /v1/sim/jobs) — the seed of a future stats service.
  */
 import { config } from "./config.ts";
+import { sql } from "./db.ts";
 import { keccak256, addressFromPrivateKey, recoverSigner, signPayload } from "./crypto.ts";
 import { toIso } from "./validate.ts";
 import { devProviderDirectory, type DevProviderInfo } from "./dev-seed.ts";
@@ -136,8 +140,10 @@ export interface DevRequestorState {
     untilIso: string;
   } | null;
   counters: { queries: number; matches: number; noMatch: number; probeRejected: number; bugs: number };
-  /** Simulated GLM spent on COMPLETED jobs since service start (price/h × run time). */
+  /** Simulated GLM spent on COMPLETED jobs, all time (price/h × run time; ledger-backed). */
   spent: number;
+  /** Completed jobs, all time (ledger-backed; unlike `counters`, survives restarts). */
+  jobs: number;
   updatedAt: string;
 }
 
@@ -152,6 +158,7 @@ export interface DevProviderEarnings {
 
 const states = new Map<string, DevRequestorState>();
 const earnings = new Map<string, DevProviderEarnings>();
+const totals = { spent: 0, jobs: 0 };
 
 export function devRequestorSnapshot(): DevRequestorState[] {
   return [...states.values()].sort((a, b) => a.displayName.localeCompare(b.displayName));
@@ -161,20 +168,162 @@ export function devSimEarnings(): DevProviderEarnings[] {
   return [...earnings.values()].sort((a, b) => b.earned - a.earned);
 }
 
+/** Market-wide sim totals, seeded from the ledger so they cover ALL settled jobs ever. */
+export function devSimTotals(): { spent: number; jobs: number } {
+  return { ...totals };
+}
+
+// ---- the job ledger (Postgres) ---------------------------------------------
+
+/**
+ * Durable record of every completed simulated job — the one piece of sim
+ * state that cannot be reconstructed, so it lives in Postgres (§14), unlike
+ * the rest of the simulator (in-memory) and liveness (Redis). Dev-only: the
+ * table exists only on deployments running the simulator, and is the raw
+ * data a future stats service would aggregate.
+ */
+export async function ensureSimLedger(): Promise<void> {
+  await sql`
+    create table if not exists dev_sim_jobs (
+      id bigint generated always as identity primary key,
+      requestor_id text not null,
+      requestor_name text not null,
+      shape text not null,
+      provider_id text not null,
+      provider_name text not null,
+      offer_id text not null,
+      price_per_hour numeric not null,
+      run_ms integer not null,
+      cost numeric not null,
+      started_at timestamptz not null,
+      settled_at timestamptz not null default now()
+    )`;
+  await sql`create index if not exists dev_sim_jobs_requestor on dev_sim_jobs (requestor_id, settled_at desc)`;
+  await sql`create index if not exists dev_sim_jobs_provider on dev_sim_jobs (provider_id, settled_at desc)`;
+  await sql`create index if not exists dev_sim_jobs_settled on dev_sim_jobs (settled_at desc)`;
+}
+
+/** One settled job as served by GET /v1/sim/jobs. */
+export interface DevSimJob {
+  id: number;
+  requestorId: string;
+  requestorName: string;
+  shape: string;
+  providerId: string;
+  providerName: string;
+  offerId: string;
+  pricePerHour: string;
+  runMs: number;
+  cost: number;
+  startedAt: string;
+  settledAt: string;
+}
+
+/** Recent settled jobs, newest first, optionally filtered to one party. */
+export async function devSimJobs(
+  limit: number,
+  requestorId: string | null,
+  providerId: string | null,
+): Promise<{ jobs: DevSimJob[]; total: number }> {
+  const wheres: string[] = ["true"];
+  const params: unknown[] = [];
+  if (requestorId) {
+    params.push(requestorId);
+    wheres.push(`requestor_id = $${params.length}`);
+  }
+  if (providerId) {
+    params.push(providerId);
+    wheres.push(`provider_id = $${params.length}`);
+  }
+  const where = wheres.join(" and ");
+  const [{ total }] = (await sql.unsafe(`select count(*)::int as total from dev_sim_jobs where ${where}`, params)) as [
+    { total: number },
+  ];
+  const rows = (await sql.unsafe(
+    `select * from dev_sim_jobs where ${where} order by settled_at desc, id desc limit ${Math.floor(limit)}`,
+    params,
+  )) as Record<string, unknown>[];
+  return {
+    total,
+    jobs: rows.map((r) => ({
+      id: Number(r.id),
+      requestorId: r.requestor_id as string,
+      requestorName: r.requestor_name as string,
+      shape: r.shape as string,
+      providerId: r.provider_id as string,
+      providerName: r.provider_name as string,
+      offerId: r.offer_id as string,
+      pricePerHour: String(r.price_per_hour),
+      runMs: r.run_ms as number,
+      cost: Number(r.cost),
+      startedAt: (r.started_at as Date).toISOString(),
+      settledAt: (r.settled_at as Date).toISOString(),
+    })),
+  };
+}
+
+/** Rebuild the in-memory aggregates from the ledger (called once at start). */
+async function loadFromLedger(): Promise<void> {
+  const [t] = await sql`select coalesce(sum(cost), 0) as spent, count(*)::int as jobs from dev_sim_jobs`;
+  totals.spent = Number(t.spent);
+  totals.jobs = t.jobs as number;
+
+  const byProvider = await sql`
+    select provider_id, max(provider_name) as name, sum(cost) as earned, count(*)::int as jobs, max(settled_at) as last
+    from dev_sim_jobs group by provider_id`;
+  for (const r of byProvider) {
+    earnings.set(r.provider_id as string, {
+      providerId: r.provider_id as string,
+      displayName: r.name as string,
+      earned: Number(r.earned),
+      jobs: r.jobs as number,
+      lastJobAt: (r.last as Date).toISOString(),
+    });
+  }
+
+  const byRequestor = await sql`
+    select requestor_id, sum(cost) as spent, count(*)::int as jobs from dev_sim_jobs group by requestor_id`;
+  for (const r of byRequestor) {
+    const st = states.get(r.requestor_id as string);
+    if (st) {
+      st.spent = Number(r.spent);
+      st.jobs = r.jobs as number;
+    }
+  }
+}
+
 /**
  * Settle a completed simulated job: the requestor's spend and the provider's
  * earnings are two views of the same event, so `Σ spent === Σ earned` holds by
- * construction. Simulated money only — accrued on completion, in-memory,
- * resets with the process (like all sim state).
+ * construction. Simulated money only. The in-memory aggregates update
+ * synchronously; the ledger row is written fire-and-forget (a lost row costs
+ * one job of sim money, never correctness of the market itself).
  */
-function settleJob(st: DevRequestorState, providerId: string, providerName: string, pricePerHour: string, runMs: number): void {
+function settleJob(
+  st: DevRequestorState,
+  providerId: string,
+  providerName: string,
+  offerId: string,
+  pricePerHour: string,
+  runMs: number,
+  startedIso: string,
+): void {
   const cost = (Number(pricePerHour) * runMs) / 3_600_000;
   st.spent += cost;
+  st.jobs += 1;
+  totals.spent += cost;
+  totals.jobs += 1;
   const e = earnings.get(providerId) ?? { providerId, displayName: providerName, earned: 0, jobs: 0, lastJobAt: "" };
   e.earned += cost;
   e.jobs += 1;
   e.lastJobAt = toIso(Date.now());
   earnings.set(providerId, e);
+  sql`
+    insert into dev_sim_jobs (requestor_id, requestor_name, shape, provider_id, provider_name, offer_id,
+                              price_per_hour, run_ms, cost, started_at)
+    values (${st.requestorId}, ${st.displayName}, ${st.shape}, ${providerId}, ${providerName}, ${offerId},
+            ${pricePerHour}, ${Math.round(runMs)}, ${cost}, ${new Date(startedIso)})
+  `.catch((err: unknown) => console.error("[dev-requestors] ledger insert failed:", err));
 }
 
 // ---- the loop ---------------------------------------------------------------
@@ -238,8 +387,12 @@ async function queryOffers(baseUrl: string, shape: JobShape): Promise<QueryResul
   return (await res.json()) as { items: WireOfferItem[] };
 }
 
-/** Start N simulated requestors against baseUrl. Returns a stopper (for tests). */
-export function startDevRequestors(n: number, baseUrl: string): () => void {
+/**
+ * Start N simulated requestors against baseUrl. Returns a stopper (for tests).
+ * Spending/earnings aggregates are reloaded from the dev_sim_jobs ledger
+ * first, so simulated money survives restarts; activity counters do not.
+ */
+export async function startDevRequestors(n: number, baseUrl: string): Promise<() => void> {
   console.warn(`⚠ ATLAS_DEV_REQUESTORS=${n} — starting ${n} SIMULATED requestors (§9 reference flow). Dev/testing only.`);
   if (config.devSeed === 0) {
     console.warn("[dev-requestors] ATLAS_DEV_SEED=0 — no dummy providers to match against; every search will come up empty.");
@@ -331,12 +484,13 @@ export function startDevRequestors(n: number, baseUrl: string): () => void {
     const runMs = randIn(p.shape.runMs);
     const providerId = hired.item.template.envelope.payload.providerId as string;
     const pricePerHour = (hired.item.terms!.envelope.payload as { minPricePerHour: string }).minPricePerHour;
+    const startedIso = toIso(now);
     st.match = {
       providerId,
       providerName: hired.info.displayName,
       offerId: hired.item.offerId,
       pricePerHour,
-      sinceIso: toIso(now),
+      sinceIso: startedIso,
       untilIso: toIso(now + runMs),
     };
     touch("running");
@@ -344,13 +498,14 @@ export function startDevRequestors(n: number, baseUrl: string): () => void {
     void postAvailability(baseUrl, hired.item.offerId, hired.info.priv, false, runMs + 30_000);
     schedule(() => {
       void postAvailability(baseUrl, hired.item.offerId, hired.info.priv, true, 0); // job done — release
-      settleJob(st, providerId, hired.info.displayName, pricePerHour, runMs);
+      settleJob(st, providerId, hired.info.displayName, hired.item.offerId, pricePerHour, runMs, startedIso);
       st.match = null;
       touch("idle");
       schedule(() => step(p, st), randIn(p.shape.idleMs));
     }, runMs);
   };
 
+  const personas: Array<[RequestorPersona, DevRequestorState]> = [];
   for (let i = 0; i < n; i++) {
     const p = requestorPersona(i);
     const st: DevRequestorState = {
@@ -367,11 +522,22 @@ export function startDevRequestors(n: number, baseUrl: string): () => void {
       match: null,
       counters: { queries: 0, matches: 0, noMatch: 0, probeRejected: 0, bugs: 0 },
       spent: 0,
+      jobs: 0,
       updatedAt: toIso(Date.now()),
     };
     states.set(p.requestorId, st);
-    schedule(() => step(p, st), rand(500, 20_000));
+    personas.push([p, st]);
   }
+
+  // rebuild money/jobs aggregates from the durable ledger before going live,
+  // so the dashboard never shows zeros that later jump on the first settle
+  try {
+    await loadFromLedger();
+  } catch (e) {
+    console.error("[dev-requestors] ledger load failed — starting with fresh aggregates:", e);
+  }
+
+  for (const [p, st] of personas) schedule(() => step(p, st), rand(500, 20_000));
 
   return () => {
     stopped = true;
@@ -379,5 +545,7 @@ export function startDevRequestors(n: number, baseUrl: string): () => void {
     timers.clear();
     states.clear();
     earnings.clear();
+    totals.spent = 0;
+    totals.jobs = 0;
   };
 }

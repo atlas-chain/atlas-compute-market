@@ -126,6 +126,9 @@ describe.skipIf(!docker)("end-to-end provider → requestor flow", () => {
     expect(body.unit).toBe("GLM");
     expect(body.providers).toEqual({ total: 1, active: 1, busy: 0, free: 1 });
     expect(body.offers).toEqual({ active: 1, live: 1, busy: 0 });
+    expect(body.demandSim).toBeUndefined();
+    // sim-only routes must not exist when the simulator is off
+    expect((await fetch(`${BASE}/v1/sim/jobs`)).status).toBe(404);
     expect(body.attestations.valid).toBe(1);
     expect(body.capacity.liveCores).toBe(2);
     expect(body.capacity.liveRamGib).toBe(16);

@@ -26,9 +26,32 @@ export interface DemandSimRequestor {
     untilIso: string;
   } | null;
   counters: { queries: number; matches: number; noMatch: number; probeRejected: number; bugs: number };
-  /** Simulated GLM spent on completed jobs since service start. */
+  /** Simulated GLM spent on completed jobs, all time (ledger-backed, survives restarts). */
   spent: number;
+  /** Completed jobs, all time (ledger-backed; `counters` are since service start). */
+  jobs: number;
   updatedAt: string;
+}
+
+/** One settled simulated job from the durable ledger (GET /v1/sim/jobs, dev only). */
+export interface SimJob {
+  id: number;
+  requestorId: string;
+  requestorName: string;
+  shape: string;
+  providerId: string;
+  providerName: string;
+  offerId: string;
+  pricePerHour: string;
+  runMs: number;
+  cost: number;
+  startedAt: string;
+  settledAt: string;
+}
+
+export interface SimJobList {
+  jobs: SimJob[];
+  total: number;
 }
 
 /** Per-provider earnings from completed simulated jobs (mirror of requestor `spent`). */
@@ -174,6 +197,12 @@ export const api = {
   spec: () => get<Spec>("/v1/spec"),
   health: () => get<Health>("/v1/health"),
   providers: (limit: number, offset: number) => get<ProviderList>(`/v1/providers?limit=${limit}&offset=${offset}`),
+  simJobs: (limit: number, party?: { requestor?: string; provider?: string }) => {
+    const q = new URLSearchParams({ limit: String(limit) });
+    if (party?.requestor) q.set("requestor", party.requestor);
+    if (party?.provider) q.set("provider", party.provider);
+    return get<SimJobList>(`/v1/sim/jobs?${q}`);
+  },
   provider: (id: string) => get<ProviderDetail>(`/v1/providers/${id}`),
   offers: (filters: OfferFilters, limit: number, cursor?: string | null) => {
     const q = new URLSearchParams();

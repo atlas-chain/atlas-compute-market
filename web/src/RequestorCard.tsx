@@ -1,5 +1,6 @@
 import { Link, useParams } from "react-router-dom";
 import type { DemandSim } from "./api";
+import { SimJobsTable } from "./SimJobsTable";
 import { accruing, fmtGlm, fmtInt, shortHex, timeAgo, untilShort } from "./format";
 
 const PILL: Record<string, string> = { running: "active", probing: "stale", searching: "", idle: "" };
@@ -75,16 +76,12 @@ export function RequestorCard({ demand, unit }: { demand: DemandSim | null; unit
               <span className="v">{r.match ? `+${fmtGlm(live)} ${unit}` : "—"}</span>
             </div>
             <div>
-              <span className="k">jobs completed</span>
-              <span className="v">{fmtInt(r.counters.matches - (r.match ? 1 : 0))}</span>
+              <span className="k">jobs completed (all time)</span>
+              <span className="v">{fmtInt(r.jobs)}</span>
             </div>
             <div>
               <span className="k">avg per job</span>
-              <span className="v">
-                {r.counters.matches - (r.match ? 1 : 0) > 0
-                  ? `${fmtGlm(r.spent / (r.counters.matches - (r.match ? 1 : 0)))} ${unit}`
-                  : "—"}
-              </span>
+              <span className="v">{r.jobs > 0 ? `${fmtGlm(r.spent / r.jobs)} ${unit}` : "—"}</span>
             </div>
           </div>
         </div>
@@ -148,9 +145,12 @@ export function RequestorCard({ demand, unit }: { demand: DemandSim | null; unit
         </div>
         <p className="hint">
           a simulated requestor runs the spec §9 flow against the real API — query, verify signatures, probe — and only
-          ever hires dev-dummy providers; its spending is simulated {unit}, settled per completed job
+          ever hires dev-dummy providers; its spending is simulated {unit}, settled per completed job into a durable
+          ledger (counters above reset with the service, money and jobs do not)
         </p>
       </div>
+
+      <SimJobsTable unit={unit} party={{ requestor: r.requestorId }} />
     </section>
   );
 }

@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import type { DemandSim, DemandSimRequestor } from "./api";
+import { SimJobsTable } from "./SimJobsTable";
 import { accruing, fmtGlm, fmtInt, timeAgo, untilShort } from "./format";
 
 // simulated statuses mapped onto the existing pill palette
@@ -44,7 +45,7 @@ function DemandRow({ r, unit }: { r: DemandSimRequestor; unit: string }) {
       <td className="num" title={r.match ? `+${fmtGlm(live)} accruing on the current job` : undefined}>
         {fmtGlm(r.spent + live)}
       </td>
-      <td className="num">{fmtInt(r.counters.matches)}</td>
+      <td className="num" title="completed jobs, all time (ledger-backed)">{fmtInt(r.jobs)}</td>
       <td className="num">{fmtInt(r.counters.noMatch)}</td>
       <td className="num">{fmtInt(r.counters.queries)}</td>
       <td className={r.counters.bugs > 0 ? "num error-note" : "num muted"}>{fmtInt(r.counters.bugs)}</td>
@@ -72,7 +73,7 @@ export function DemandTable({ demand, unit }: { demand: DemandSim | null; unit: 
                 <th>status</th>
                 <th>matched provider</th>
                 <th className="num">spent {unit}</th>
-                <th className="num">matches</th>
+                <th className="num">jobs</th>
                 <th className="num">no match</th>
                 <th className="num">queries</th>
                 <th className="num">bugs</th>
@@ -95,9 +96,9 @@ export function DemandTable({ demand, unit }: { demand: DemandSim | null; unit: 
           <div className="table-foot">
             <span className="hint">
               {items.length} simulated requestors · Σ spent {fmtGlm((demand?.totals.spent ?? 0) + liveSpend)} {unit}{" "}
-              over {fmtInt(demand?.totals.jobs ?? 0)} completed jobs (simulated money, resets with the service) · they
-              follow the spec §9 flow against the real API but only ever hire dev-dummy providers; real matching stays
-              P2P and off-registry
+              over {fmtInt(demand?.totals.jobs ?? 0)} completed jobs (simulated money, settled to a Postgres ledger —
+              survives restarts) · they follow the spec §9 flow against the real API but only ever hire dev-dummy
+              providers; real matching stays P2P and off-registry
             </span>
           </div>
         </div>
@@ -136,6 +137,13 @@ export function DemandTable({ demand, unit }: { demand: DemandSim | null; unit: 
               </span>
             </div>
           </div>
+        </div>
+      )}
+
+      {demand && (
+        <div>
+          <h2 className="label">[job history — dev only]</h2>
+          <SimJobsTable unit={unit} limit={20} />
         </div>
       )}
     </section>

@@ -554,7 +554,7 @@ GET /v1/offers/{offerId}/proof  → { "epoch": 421, "root": "0x…", "index": 17
   "price": { "min": 0.01, "median": 0.05, "max": 0.4 } | null }
 ```
 
-Deployments running the dev demand simulator (`ATLAS_DEV_REQUESTORS`, dev only — never production) additionally include a `demandSim` block: per-requestor state with simulated spending, per-dummy-provider earnings, and their totals. It is not part of the protocol.
+Deployments running the dev demand simulator (`ATLAS_DEV_REQUESTORS`, dev only — never production) additionally include a `demandSim` block — per-requestor state with simulated spending, per-dummy-provider earnings, and their totals (ledger-backed, so they survive restarts) — and expose `GET /v1/sim/jobs` (recent settled sim jobs, filterable by `requestor`/`provider`; 404 when the simulator is off). Neither is part of the protocol.
 
 The service also serves a static human-facing dashboard (the built `web/` bundle) on all non-`/v1` paths; this UI is an ordinary API client and not part of the protocol.
 

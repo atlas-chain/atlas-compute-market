@@ -78,17 +78,12 @@ export async function getStats(req: Request, server: Server<unknown>): Promise<R
     // dev-only simulated demand (ATLAS_DEV_REQUESTORS) — absent in production
     let demandSim: Record<string, unknown> | undefined;
     if (config.devRequestors > 0) {
-      const { devRequestorSnapshot, devSimEarnings } = await import("../dev-requestors.ts");
-      const requestors = devRequestorSnapshot();
-      const earnings = devSimEarnings();
+      const { devRequestorSnapshot, devSimEarnings, devSimTotals } = await import("../dev-requestors.ts");
       demandSim = {
-        requestors,
-        earnings,
-        // Σ spent === Σ earned by construction (both accrue per completed sim job)
-        totals: {
-          spent: requestors.reduce((s, r) => s + r.spent, 0),
-          jobs: earnings.reduce((s, e) => s + e.jobs, 0),
-        },
+        requestors: devRequestorSnapshot(),
+        earnings: devSimEarnings(),
+        // ledger-backed (survives restarts); Σ spent === Σ earned by construction
+        totals: devSimTotals(),
       };
     }
 

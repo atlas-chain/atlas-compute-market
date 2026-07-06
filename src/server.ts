@@ -50,6 +50,16 @@ export async function startServer(port = config.port): Promise<Server<unknown>> 
     await seedDevMarket(config.devSeed);
   }
 
+  // dev-only sim routes exist only when the simulator runs (404 otherwise);
+  // the durable job ledger must exist before the first request can hit them
+  let simRoutes: Record<string, { GET: (req: Request, server: Server<unknown>) => Promise<Response> }> = {};
+  if (config.devRequestors > 0) {
+    const { ensureSimLedger } = await import("./dev-requestors.ts");
+    await ensureSimLedger();
+    const { getSimJobs } = await import("./handlers/sim.ts");
+    simRoutes = { "/v1/sim/jobs": { GET: wrap(getSimJobs as Handler) } };
+  }
+
   const server = Bun.serve({
     port,
     routes: {
@@ -71,6 +81,7 @@ export async function startServer(port = config.port): Promise<Server<unknown>> 
       "/v1/health": { GET: wrap(getHealth as Handler) },
       "/v1/spec": { GET: wrap(getSpec as Handler) },
       "/v1/stats": { GET: wrap(getStats as Handler) },
+      ...simRoutes,
     },
     async fetch(req) {
       const ui = await serveStatic(req);
@@ -86,7 +97,7 @@ export async function startServer(port = config.port): Promise<Server<unknown>> 
   // started after listen: the simulated requestors consume the real HTTP API
   if (config.devRequestors > 0) {
     const { startDevRequestors } = await import("./dev-requestors.ts");
-    startDevRequestors(config.devRequestors, `http://localhost:${server.port}`);
+    await startDevRequestors(config.devRequestors, `http://localhost:${server.port}`);
   }
   return server;
 }

@@ -1,6 +1,7 @@
 import { Link, useParams } from "react-router-dom";
 import { api, type Stats } from "./api";
 import { usePoll } from "./usePoll";
+import { SimJobsTable } from "./SimJobsTable";
 import { accruing, fmtGlm, fmtInt, providerStatus, shortHex, timeAgo, untilShort } from "./format";
 
 /** Full-page card for one provider: profile, attestation, offers, sim earnings. */
@@ -169,10 +170,13 @@ export function ProviderCard({ stats, unit }: { stats: Stats | null; unit: strin
             </div>
           </div>
           <p className="hint">
-            simulated money: dev requestors paying dev dummies — resets with the service, never real {unit}
+            simulated money: dev requestors paying dev dummies — settled per completed job into a durable ledger,
+            never real {unit}
           </p>
         </div>
       )}
+
+      {stats?.demandSim && (earnings || hirers.length > 0) && <SimJobsTable unit={unit} party={{ provider: id }} />}
     </section>
   );
 }
