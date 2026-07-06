@@ -1,0 +1,17 @@
+[package]
+name = "atlas-vm-driver"
+version = "0.1.0"
+edition = "2021"
+
+# Standalone driver that registers the provider from inside a Golem VM
+# (ya-runtime-vm) with no yagna installation: deploy → start → run the
+# agent, while relaying its file-transport traffic to the registry.
+
+[dependencies]
+# exact ya-runtime-api rev used by ya-runtime-vm v0.5.3 → wire-compatible
+ya-runtime-api = { git = "https://github.com/golemfactory/yagna.git", rev = "2222cadeed58ecc44295092fcb0bc9ffba8a3722", features = ["server"] }
+tokio = { version = "1", features = ["macros", "rt", "process", "signal", "sync", "time"] }
+futures = "0.3"
+anyhow = "1"
+serde_json = "1"
+ureq = { version = "2", features = ["json"] }

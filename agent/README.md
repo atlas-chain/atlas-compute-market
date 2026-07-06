@@ -66,6 +66,38 @@ every payload is signed inside the container, so a hostile relay can at
 worst deny service or slow the (server-timed) benchmark, never forge
 provider messages.
 
+## Golem VM (ya-runtime-vm) — no yagna needed
+
+`vm-driver/` registers the provider from inside a Golem VM instead of docker:
+it drives [ya-runtime-vm](https://github.com/golemfactory/ya-runtime-vm)
+v0.5.3 standalone over its runtime API (deploy → start → run), runs the agent
+with `--exchange /exchange`, and relays the exchange files itself (same file
+protocol as `manager.py`). The VM has **no network interface at all** — the
+image must declare `VOLUME /exchange` (this Dockerfile does), which the
+runtime 9p-mounts from the host.
+
+```sh
+# once: fetch the runtime (needs /dev/kvm access, e.g. membership in the kvm group)
+curl -sL https://github.com/golemfactory/ya-runtime-vm/releases/download/v0.5.3/ya-runtime-vm-linux-v0.5.3.tar.gz | tar xz
+# once: build the driver (protoc required: apt install protobuf-compiler)
+cargo build --release --manifest-path agent/vm-driver/Cargo.toml
+# build the .gvmi (or download the one published by the GitHub action)
+docker build -t atlas-agent agent/ && gvmkit-build atlas-agent:latest
+
+agent/vm-driver/target/release/atlas-vm-driver \
+  --runtime ya-runtime-vm-linux-v0.5.3/ya-runtime-vm/ya-runtime-vm \
+  --image atlas-agent-latest-<id>.gvmi \
+  --workdir ./vm-workdir --cpu-cores 4 --mem-gib 8 \
+  --env DISPLAY_NAME=my-vm-node -- --once
+```
+
+`--cpu-cores` / `--mem-gib` size the VM and thereby the declared/benchmarked
+capability. The workdir keeps the deployment and the exchange volume (with
+`provider.key`) across runs — the driver reuses it, so restarts keep the same
+identity and live attestation; delete the workdir for a fresh identity. The
+driver pins the exact `ya-runtime-api` revision used by ya-runtime-vm v0.5.3,
+so the stdio protocol matches the release binary.
+
 ## GVMI image (Golem registry)
 
 The manually triggered **Build provider GVMI image** GitHub action

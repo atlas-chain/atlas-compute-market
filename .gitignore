@@ -5,6 +5,7 @@ bun.lockb
 !.env.example
 dist/
 agent/target/
+agent/vm-driver/target/
 *.log
 .DS_Store
 coverage/

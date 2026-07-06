@@ -19,7 +19,10 @@ COPY src ./src
 RUN touch src/main.rs src/lib.rs && cargo build --release --locked
 
 FROM alpine:3
-RUN adduser -D -u 10001 agent
-USER agent
 COPY --from=build /build/target/release/atlas-agent /usr/local/bin/atlas-agent
+# exchange dir for the file transport (--exchange): a bind mount under docker,
+# a 9p-mounted host volume under ya-runtime-vm (which needs it declared here)
+VOLUME /exchange
+# no USER: manager.py drops privileges with --user; under ya-runtime-vm the
+# guest must run as root to write the 9p exchange volume (security_model=none)
 ENTRYPOINT ["atlas-agent"]
