@@ -24,6 +24,8 @@ services:
       ATLAS_SERVICE_PRIVKEY: "${ATLAS_SERVICE_PRIVKEY:?set ATLAS_SERVICE_PRIVKEY in .env}"
       # dev/testing only — dummy providers with fabricated attestations (see .env.example)
       ATLAS_DEV_SEED: "${ATLAS_DEV_SEED:-0}"
+      # dev/testing only — simulated requestors exercising the §9 flow (see .env.example)
+      ATLAS_DEV_REQUESTORS: "${ATLAS_DEV_REQUESTORS:-0}"
     ports:
       # loopback-only; the host nginx terminates TLS and proxies here.
       - "127.0.0.1:28886:8080"

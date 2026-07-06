@@ -3,6 +3,7 @@ import { usePoll } from "./usePoll";
 import { Tiles } from "./Tiles";
 import { ProvidersTable } from "./ProvidersTable";
 import { OffersTable } from "./OffersTable";
+import { DemandTable } from "./DemandTable";
 import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 
 export default function App() {
@@ -25,6 +26,7 @@ export default function App() {
         <nav className="primary-nav" aria-label="Market sections">
           <NavLink to="/providers">Providers</NavLink>
           <NavLink to="/offers">Offers</NavLink>
+          {stats?.demandSim && <NavLink to="/demand">Demand (sim)</NavLink>}
         </nav>
         <span className="chip" title={commit}>commit {commit.slice(0, 7)}</span>
         <span className="chip">committed {commitDate.slice(0, 10)}</span>
@@ -42,6 +44,7 @@ export default function App() {
         <Routes>
           <Route path="/providers" element={<ProvidersTable />} />
           <Route path="/offers" element={<OffersTable unit={spec?.unit ?? "GLM"} />} />
+          <Route path="/demand" element={<DemandTable demand={stats?.demandSim ?? null} unit={spec?.unit ?? "GLM"} />} />
           <Route path="*" element={<Navigate to="/providers" replace />} />
         </Routes>
       </main>

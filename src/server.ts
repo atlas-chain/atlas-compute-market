@@ -81,6 +81,12 @@ export async function startServer(port = config.port): Promise<Server<unknown>> 
   console.log(
     `atlas registry listening on :${server.port} — service key ${addressFromPrivateKey(config.servicePrivKey)}`,
   );
+
+  // started after listen: the simulated requestors consume the real HTTP API
+  if (config.devRequestors > 0) {
+    const { startDevRequestors } = await import("./dev-requestors.ts");
+    startDevRequestors(config.devRequestors, `http://localhost:${server.port}`);
+  }
   return server;
 }
 

@@ -54,6 +54,8 @@ export const config = {
 
   // dev-only: seed N dummy providers with fake attestations + heartbeats (never in production)
   devSeed: num("ATLAS_DEV_SEED", 0),
+  // dev-only: run N simulated requestors exercising the §9 flow against the own API (never in production)
+  devRequestors: num("ATLAS_DEV_REQUESTORS", 0),
 
   // rate limits (§12): [max, windowMs]
   rl: {

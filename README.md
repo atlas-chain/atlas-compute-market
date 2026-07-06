@@ -65,6 +65,8 @@ bun run build      # emits web/dist for the registry to serve
 
 With no real providers around, seed dummy ones (fake attestations + heartbeats — dev only): `ATLAS_DEV_SEED=10 bun start`.
 
+To also simulate demand, add `ATLAS_DEV_REQUESTORS=6`: N simulated requestors run the spec §9 flow against the real API (query with their job shape's filters, verify all envelope signatures client-side, simulate the P2P hire probe) and only ever "hire" the dev dummies — real matching stays peer-to-peer and off-registry. Their state shows up as a **Demand (sim)** page in the dashboard, and any signature/filter/liveness violation they observe is logged as a `BUG` (they double as a continuous end-to-end check of the read path).
+
 ## Layout
 
 | Path | What |

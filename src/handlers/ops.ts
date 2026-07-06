@@ -62,6 +62,13 @@ export async function getStats(req: Request, server: Server<unknown>): Promise<R
           ? prices[(prices.length - 1) / 2]!
           : (prices[prices.length / 2 - 1]! + prices[prices.length / 2]!) / 2;
 
+    // dev-only simulated demand (ATLAS_DEV_REQUESTORS) — absent in production
+    let demandSim: { requestors: unknown[] } | undefined;
+    if (config.devRequestors > 0) {
+      const { devRequestorSnapshot } = await import("../dev-requestors.ts");
+      demandSim = { requestors: devRequestorSnapshot() };
+    }
+
     blob = JSON.stringify({
       at: Math.floor(now / 1000),
       unit: config.unit,
@@ -70,6 +77,7 @@ export async function getStats(req: Request, server: Server<unknown>): Promise<R
       attestations: { valid: totals.attestations },
       capacity: { liveCores, liveRamGib },
       price: prices.length === 0 ? null : { min: prices[0]!, median, max: prices[prices.length - 1]! },
+      ...(demandSim ? { demandSim } : {}),
     });
     await redis.setCachedStats(blob, config.statsTtlMs);
   }

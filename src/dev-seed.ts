@@ -63,6 +63,26 @@ function persona(i: number): Persona {
   };
 }
 
+export interface DevProviderInfo {
+  displayName: string;
+  behavior: Persona["behavior"];
+}
+
+/**
+ * Public directory of the dev personas (providerId → name + liveness
+ * behavior). The dev requestor simulator uses it to (a) restrict itself to
+ * dummy providers and (b) derive simulated P2P probe outcomes, since the
+ * dummies' endpoints are `.invalid` and cannot actually be dialed.
+ */
+export function devProviderDirectory(n: number): Map<string, DevProviderInfo> {
+  const dir = new Map<string, DevProviderInfo>();
+  for (let i = 0; i < n; i++) {
+    const p = persona(i);
+    dir.set(p.providerId, { displayName: p.displayName, behavior: p.behavior });
+  }
+  return dir;
+}
+
 /** Fabricated but plausible score: ~600 CU/core single, sublinear scaling. */
 function fakeScores(coreCount: number, i: number) {
   const perCore = 500 + ((i * 97) % 300);

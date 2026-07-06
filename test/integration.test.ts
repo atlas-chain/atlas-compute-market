@@ -19,6 +19,10 @@ process.env.ATLAS_CHECKPOINTS = "64";
 process.env.ATLAS_SAMPLES = "8";
 process.env.ATLAS_LIVENESS_TTL_MS = "50";
 process.env.ATLAS_STATS_TTL_MS = "50";
+// bun auto-loads the repo .env (production compose secrets) — the exact-count
+// assertions below need a market containing only this test's provider
+process.env.ATLAS_DEV_SEED = "0";
+process.env.ATLAS_DEV_REQUESTORS = "0";
 
 const docker = Bun.which("docker") !== null && (await Bun.$`docker info`.quiet().nothrow()).exitCode === 0;
 const CONTAINERS = ["atlas-it-pg", "atlas-it-redis"];
@@ -43,7 +47,9 @@ describe.skipIf(!docker)("end-to-end provider → requestor flow", () => {
     await Bun.$`docker run -d --rm --name atlas-it-pg -e POSTGRES_USER=atlas -e POSTGRES_PASSWORD=atlas -e POSTGRES_DB=atlas -p ${PG_PORT}:5432 postgres:16-alpine`.quiet();
     await Bun.$`docker run -d --rm --name atlas-it-redis -p ${REDIS_PORT}:6379 redis:7-alpine`.quiet();
     await waitFor(
-      async () => (await Bun.$`docker exec atlas-it-pg pg_isready -U atlas`.quiet().nothrow()).exitCode === 0,
+      // -h 127.0.0.1 forces a TCP probe: the unix socket already answers during
+      // initdb's temporary server, giving a false ready before the real listener is up
+      async () => (await Bun.$`docker exec atlas-it-pg pg_isready -U atlas -h 127.0.0.1`.quiet().nothrow()).exitCode === 0,
       "postgres",
     );
     await waitFor(
@@ -73,7 +79,7 @@ describe.skipIf(!docker)("end-to-end provider → requestor flow", () => {
 
   test("health reports both stores up", async () => {
     const res = await fetch(`${BASE}/v1/health`);
-    expect(await jsonOf(res)).toEqual({ postgres: "ok", redis: "ok" });
+    expect(await jsonOf(res)).toEqual({ version: expect.any(String), postgres: "ok", redis: "ok" });
   });
 
   test("attestation is persisted, service-signed, and fetchable", async () => {

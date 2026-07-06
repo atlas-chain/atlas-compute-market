@@ -9,6 +9,30 @@ export interface Scores {
   dagHash: number | null;
 }
 
+/** One simulated dev requestor (ATLAS_DEV_REQUESTORS); present in dev deployments only. */
+export interface DemandSimRequestor {
+  requestorId: string;
+  displayName: string;
+  shape: string;
+  wants: { coresMin: number | null; ramGibMin: number | null; scoreFullMin: number | null };
+  maxPricePerHour: string;
+  status: "searching" | "probing" | "running" | "idle";
+  match: {
+    providerId: string;
+    providerName: string;
+    offerId: string;
+    pricePerHour: string;
+    sinceIso: string;
+    untilIso: string;
+  } | null;
+  counters: { queries: number; matches: number; noMatch: number; probeRejected: number; bugs: number };
+  updatedAt: string;
+}
+
+export interface DemandSim {
+  requestors: DemandSimRequestor[];
+}
+
 export interface Stats {
   at: number;
   unit: string;
@@ -17,6 +41,7 @@ export interface Stats {
   attestations: { valid: number };
   capacity: { liveCores: number; liveRamGib: number };
   price: { min: number; median: number; max: number } | null;
+  demandSim?: DemandSim;
 }
 
 export interface ProviderItem {

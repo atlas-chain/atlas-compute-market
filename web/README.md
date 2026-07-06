@@ -12,4 +12,4 @@ bun run dev     # :5173, proxies /v1 to http://localhost:8080 (override: ATLAS_A
 bun run build   # emits dist/ — the registry serves it on non-/v1 paths
 ```
 
-No data locally? Seed dummy providers: `ATLAS_DEV_SEED=10 bun start` in the repo root.
+No data locally? Seed dummy providers: `ATLAS_DEV_SEED=10 bun start` in the repo root. Add `ATLAS_DEV_REQUESTORS=6` to also get simulated demand (the **Demand (sim)** page).
