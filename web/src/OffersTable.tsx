@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, type OfferFilters, type OfferItem, type OfferList } from "./api";
 import { fmtInt, shortHex, untilShort } from "./format";
 
@@ -16,8 +17,10 @@ function OfferRow({ o }: { o: OfferItem }) {
       <td className="mono muted" title={o.offerId}>
         {shortHex(o.offerId, 12, 4)}
       </td>
-      <td className="mono muted" title={o.template.envelope.payload.providerId}>
-        {shortHex(o.template.envelope.payload.providerId, 10, 4)}
+      <td className="mono" title={o.template.envelope.payload.providerId}>
+        <Link to={`/providers/${o.template.envelope.payload.providerId}`}>
+          {shortHex(o.template.envelope.payload.providerId, 10, 4)}
+        </Link>
       </td>
       <td className="muted">{att.cpuModel ?? "—"}</td>
       <td className="num">{att.coreCount}</td>

@@ -153,6 +153,18 @@ tr.detail td {
 }
 .detail-grid .v { font: 500 12.5px var(--font-mono); overflow-wrap: anywhere; }
 
+/* ---- entity cards (provider / requestor pages) ---- */
+section.card { display: flex; flex-direction: column; gap: 16px; }
+.back {
+  font: 500 11px var(--font-mono); letter-spacing: 0.06em; text-transform: lowercase;
+  align-self: flex-start;
+}
+.card-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.card-head h2 { margin: 0; font: 700 20px var(--font-mono); letter-spacing: -0.01em; }
+.card-head .addr { font-size: 12px; color: var(--ink-muted); overflow-wrap: anywhere; }
+.card-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; align-items: start; }
+.card .panel .label { margin-bottom: 12px; }
+
 /* ---- status pills ---- */
 .pill {
   font-family: var(--font-mono); font-size: 10px; font-weight: 700;

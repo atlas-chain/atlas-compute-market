@@ -108,17 +108,27 @@ export async function listProviders(req: Request, server: Server<unknown>): Prom
   const ids = rows.map((r) => bufToHex(r.provider_id as Uint8Array));
   const seenMap = await redis.lastSeenBatch(ids);
 
-  // live-offer counts per provider, derived from the Redis live set (empty map when degraded)
+  // live/busy-offer counts per provider, derived from the Redis live set
+  // and the avail/v1 busy flags (§6.5) — both empty maps when degraded
   const liveByProvider = new Map<string, number>();
+  const busyByProvider = new Map<string, number>();
   const live = await redis.liveOffers(Date.now());
   if (live.length > 0) {
+    const liveIds = live.map(([id]) => id);
+    const busySet = await redis.busyBatch(liveIds);
     // bytea[] params aren't serializable by Bun SQL — ship hex and decode in SQL
-    const hexList = live.map(([id]) => id.slice(2)).join(",");
+    const hexList = liveIds.map((id) => id.slice(2)).join(",");
+    const busyHex = [...busySet].map((id) => id.slice(2)).join(",");
     const counts = await sql`
-      select provider_id, count(*)::int as n from offers
+      select provider_id, count(*)::int as n,
+             count(*) filter (where encode(offer_id, 'hex') = any(string_to_array(${busyHex}, ',')))::int as busy
+      from offers
       where offer_id in (select decode(h, 'hex') from unnest(string_to_array(${hexList}, ',')) h)
       group by provider_id`;
-    for (const c of counts) liveByProvider.set(bufToHex(c.provider_id), c.n as number);
+    for (const c of counts) {
+      liveByProvider.set(bufToHex(c.provider_id), c.n as number);
+      busyByProvider.set(bufToHex(c.provider_id), c.busy as number);
+    }
   }
 
   const items = rows.map((r, i) => ({
@@ -127,6 +137,7 @@ export async function listProviders(req: Request, server: Server<unknown>): Prom
     heartbeatIntervalSec: r.heartbeat_interval_sec as number,
     activeOffers: r.active_offers as number,
     liveOffers: liveByProvider.get(ids[i]!) ?? 0,
+    busyOffers: busyByProvider.get(ids[i]!) ?? 0,
     attestation:
       r.att_expires_at === null
         ? null
@@ -163,15 +174,34 @@ export async function getProvider(req: RouteReq): Promise<Response> {
   if (rows.length === 0) throw err("UNKNOWN_PROVIDER", "provider not registered");
 
   const att = await sql`
-    select attestation_id, model, score_single, score_quad, score_eight, score_full,
+    select attestation_id, model, core_count, ram_gib, cpu_model,
+           score_single, score_quad, score_eight, score_full,
            score_ram_bandwidth, score_dag_hash, expires_at
     from attestations
     where provider_id = ${providerId} and expires_at > now()
     order by measured_at desc limit 1`;
 
-  const stats = await sql`
-    select count(*)::int as active_offers
-    from offers where provider_id = ${providerId} and revoked_at is null and expires_at > now()`;
+  // this provider's active offers with per-offer live/busy state, for
+  // provider-page views — same unsigned server-derived caveat as §8.1
+  const offerRows: Record<string, unknown>[] = await sql`
+    select offer_id, expires_at from offers
+    where provider_id = ${providerId} and revoked_at is null and expires_at > now()
+    order by created_at desc`;
+  const offerIds = offerRows.map((o) => bufToHex(o.offer_id as Uint8Array));
+  const [termsMap, busySet] = await Promise.all([redis.getTermsBatch(offerIds), redis.busyBatch(offerIds)]);
+  const offers = offerRows.map((o, i) => {
+    const oid = offerIds[i]!;
+    const terms = termsMap.get(oid) ?? null;
+    const tp = (terms?.envelope as { payload?: { minPricePerHour?: string; capacity?: { coresFree?: number } } } | undefined)
+      ?.payload;
+    return {
+      offerId: oid,
+      status: terms === null ? "stale" : busySet.has(oid) ? "busy" : "active",
+      minPricePerHour: tp?.minPricePerHour ?? null,
+      coresFree: tp?.capacity?.coresFree ?? null,
+      expiresAt: (o.expires_at as Date).toISOString(),
+    };
+  });
 
   const r = rows[0];
   return json({
@@ -181,6 +211,9 @@ export async function getProvider(req: RouteReq): Promise<Response> {
         ? {
             id: bufToHex(att[0].attestation_id),
             model: att[0].model,
+            coreCount: att[0].core_count as number,
+            ramGib: Number(att[0].ram_gib),
+            cpuModel: (att[0].cpu_model as string | null) ?? null,
             scores: {
               singleCore: Number(att[0].score_single),
               quadCore: Number(att[0].score_quad),
@@ -192,8 +225,11 @@ export async function getProvider(req: RouteReq): Promise<Response> {
             expiresAt: (att[0].expires_at as Date).toISOString(),
           }
         : null,
+    offers,
     stats: {
-      activeOffers: stats[0].active_offers,
+      activeOffers: offers.length,
+      liveOffers: offers.filter((o) => o.status !== "stale").length,
+      busyOffers: offers.filter((o) => o.status === "busy").length,
       lastSeenAt: await redis.lastSeen(id),
       firstSeenAt: (r.first_seen_at as Date).toISOString(),
     },

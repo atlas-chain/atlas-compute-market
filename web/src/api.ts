@@ -26,17 +26,30 @@ export interface DemandSimRequestor {
     untilIso: string;
   } | null;
   counters: { queries: number; matches: number; noMatch: number; probeRejected: number; bugs: number };
+  /** Simulated GLM spent on completed jobs since service start. */
+  spent: number;
   updatedAt: string;
+}
+
+/** Per-provider earnings from completed simulated jobs (mirror of requestor `spent`). */
+export interface SimEarnings {
+  providerId: string;
+  displayName: string;
+  earned: number;
+  jobs: number;
+  lastJobAt: string;
 }
 
 export interface DemandSim {
   requestors: DemandSimRequestor[];
+  earnings: SimEarnings[];
+  totals: { spent: number; jobs: number };
 }
 
 export interface Stats {
   at: number;
   unit: string;
-  providers: { total: number; active: number };
+  providers: { total: number; active: number; busy?: number; free?: number };
   offers: { active: number; live: number; busy?: number };
   attestations: { valid: number };
   capacity: { liveCores: number; liveRamGib: number };
@@ -50,6 +63,7 @@ export interface ProviderItem {
   heartbeatIntervalSec: number;
   activeOffers: number;
   liveOffers: number;
+  busyOffers: number;
   attestation: {
     coreCount: number;
     ramGib: number;
@@ -68,11 +82,35 @@ export interface ProviderList {
   offset: number;
 }
 
+/** One of a provider's active offers with its current live/busy state (§8.1). */
+export interface ProviderOffer {
+  offerId: string;
+  status: "active" | "busy" | "stale";
+  minPricePerHour: string | null;
+  coresFree: number | null;
+  expiresAt: string;
+}
+
 export interface ProviderDetail {
   envelope: { payload: Record<string, unknown>; signature: string };
   meta: { hash: string; receivedAt: string };
-  attestation: { id: string; model: string; scores: Scores; expiresAt: string } | null;
-  stats: { activeOffers: number; lastSeenAt: string | null; firstSeenAt: string };
+  attestation: {
+    id: string;
+    model: string;
+    coreCount: number;
+    ramGib: number;
+    cpuModel: string | null;
+    scores: Scores;
+    expiresAt: string;
+  } | null;
+  offers: ProviderOffer[];
+  stats: {
+    activeOffers: number;
+    liveOffers: number;
+    busyOffers: number;
+    lastSeenAt: string | null;
+    firstSeenAt: string;
+  };
 }
 
 export interface Envelope<P = Record<string, unknown>> {

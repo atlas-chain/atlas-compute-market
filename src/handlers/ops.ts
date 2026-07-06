@@ -54,8 +54,18 @@ export async function getStats(req: Request, server: Server<unknown>): Promise<R
              (select count(*) from offers where revoked_at is null and expires_at > now())::int as active_offers,
              (select count(*) from attestations where expires_at > now())::int as attestations`;
 
-    // busy = live offers a provider has flagged taken (avail/v1, §6.5)
-    const busyOffers = live.length === 0 ? 0 : (await redis.busyBatch(live.map(([id]) => id))).size;
+    // busy = live offers a provider has flagged taken (avail/v1, §6.5);
+    // a provider counts as busy when ≥ 1 of its live offers is flagged
+    const busySet = live.length === 0 ? new Set<string>() : await redis.busyBatch(live.map(([id]) => id));
+    const busyOffers = busySet.size;
+    let busyProviders = 0;
+    if (busyOffers > 0) {
+      const busyHex = [...busySet].map((id) => id.slice(2)).join(",");
+      const [b] = await sql`
+        select count(distinct provider_id)::int as n from offers
+        where offer_id in (select decode(h, 'hex') from unnest(string_to_array(${busyHex}, ',')) h)`;
+      busyProviders = b.n as number;
+    }
 
     const prices = live.map(([, p]) => Number(p)).sort((a, b) => a - b);
     const median =
@@ -66,16 +76,31 @@ export async function getStats(req: Request, server: Server<unknown>): Promise<R
           : (prices[prices.length / 2 - 1]! + prices[prices.length / 2]!) / 2;
 
     // dev-only simulated demand (ATLAS_DEV_REQUESTORS) — absent in production
-    let demandSim: { requestors: unknown[] } | undefined;
+    let demandSim: Record<string, unknown> | undefined;
     if (config.devRequestors > 0) {
-      const { devRequestorSnapshot } = await import("../dev-requestors.ts");
-      demandSim = { requestors: devRequestorSnapshot() };
+      const { devRequestorSnapshot, devSimEarnings } = await import("../dev-requestors.ts");
+      const requestors = devRequestorSnapshot();
+      const earnings = devSimEarnings();
+      demandSim = {
+        requestors,
+        earnings,
+        // Σ spent === Σ earned by construction (both accrue per completed sim job)
+        totals: {
+          spent: requestors.reduce((s, r) => s + r.spent, 0),
+          jobs: earnings.reduce((s, e) => s + e.jobs, 0),
+        },
+      };
     }
 
     blob = JSON.stringify({
       at: Math.floor(now / 1000),
       unit: config.unit,
-      providers: { total: totals.providers, active: liveProviders },
+      providers: {
+        total: totals.providers,
+        active: liveProviders,
+        busy: busyProviders,
+        free: Math.max(0, liveProviders - busyProviders),
+      },
       offers: { active: totals.active_offers, live: live.length, busy: busyOffers },
       attestations: { valid: totals.attestations },
       capacity: { liveCores, liveRamGib },

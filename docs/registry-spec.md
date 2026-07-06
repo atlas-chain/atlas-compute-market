@@ -411,23 +411,29 @@ Base path `/v1`. All bodies are `application/json`. Provider write endpoints tak
 
 `POST /v1/providers` — register or supersede a profile. 201 first time, 200 on supersession. Errors: `SIG_MISMATCH`, `STALE_PAYLOAD`, `VALIDATION`.
 
-`GET /v1/providers/{providerId}` — current profile envelope + meta, plus unsigned aggregates and the current attestation summary:
+`GET /v1/providers/{providerId}` — current profile envelope + meta, plus unsigned aggregates: the current attestation summary, the provider's active offers with their live/busy state (statuses as in §8.3, minus the hard states the active filter excludes), and offer counts. Redis-derived parts (`offers[].status`, live/busy counts, `lastSeenAt`) degrade per §2:
 
 ```json
 { "envelope": {…}, "meta": {…},
-  "attestation": { "id": "0x…", "model": "cpu/v1", "scores": {…}, "expiresAt": "…" } | null,
-  "stats": { "activeOffers": 3, "lastSeenAt": "…", "firstSeenAt": "…" } }
+  "attestation": { "id": "0x…", "model": "cpu/v1", "coreCount": 16, "ramGib": 64,
+                   "cpuModel": "…", "scores": {…}, "expiresAt": "…" } | null,
+  "offers": [ { "offerId": "0x…", "status": "active" | "busy" | "stale",
+                "minPricePerHour": "0.05" | null, "coresFree": 12 | null, "expiresAt": "…" } ],
+  "stats": { "activeOffers": 3, "liveOffers": 2, "busyOffers": 1,
+             "lastSeenAt": "…", "firstSeenAt": "…" } }
 ```
 
 `GET /v1/providers?limit=50&offset=0` — paginated directory of registered providers, newest first. Like the liveness snapshot (§8.5), this is **unsigned server-derived data** for browsing/dashboards, not authoritative: to trust a provider's profile, fetch and verify `GET /v1/providers/{providerId}`. Each item carries the display name, the current attestation summary (or null), active/live offer counts, and first/last-seen timestamps (`lastSeenAt` and `liveOffers` come from Redis and degrade to null/0 per §2):
 
 ```json
 { "items": [ { "providerId": "0x…", "displayName": "…", "heartbeatIntervalSec": 30,
-    "activeOffers": 3, "liveOffers": 2,
+    "activeOffers": 3, "liveOffers": 2, "busyOffers": 1,
     "attestation": { "coreCount": 16, "ramGib": 64, "cpuModel": "…", "scores": {…}, "expiresAt": "…" } | null,
     "firstSeenAt": "…", "lastSeenAt": "…" | null } ],
   "total": 128, "limit": 50, "offset": 0 }
 ```
+
+`busyOffers` counts the subset of `liveOffers` currently flagged busy by the provider (avail/v1, §6.5); like `liveOffers` it degrades to 0 per §2.
 
 ### 8.2 Attestation (benchmark)
 
@@ -537,16 +543,18 @@ GET /v1/offers/{offerId}/proof  → { "epoch": 421, "root": "0x…", "index": 17
 
 `GET /v1/health` → `{ "postgres": "ok", "redis": "ok|absent" }` (the `epoch` field is added once §11 ships). `GET /v1/spec` returns this document's version, the supported compute models, and the service's signing key for attestations (and, later, the transparency feed).
 
-`GET /v1/stats` — unsigned market aggregates for dashboards, cached server-side like the liveness blob (a few seconds). Price aggregates are over the **live** set's current `minPricePerHour`; `providers.active` counts providers with ≥ 1 live offer. All Redis-derived numbers degrade to 0/null per §2:
+`GET /v1/stats` — unsigned market aggregates for dashboards, cached server-side like the liveness blob (a few seconds). Price aggregates are over the **live** set's current `minPricePerHour`; `providers.active` counts providers with ≥ 1 live offer, `providers.busy` those with ≥ 1 live offer flagged busy (avail/v1, §6.5), and `providers.free` the remainder (`active − busy`); `offers.busy` counts the busy-flagged live offers themselves. All Redis-derived numbers degrade to 0/null per §2:
 
 ```json
 { "at": 1780560300, "unit": "GLM",
-  "providers": { "total": 128, "active": 97 },
-  "offers": { "active": 412, "live": 388 },
+  "providers": { "total": 128, "active": 97, "busy": 12, "free": 85 },
+  "offers": { "active": 412, "live": 388, "busy": 14 },
   "attestations": { "valid": 120 },
   "capacity": { "liveCores": 6144, "liveRamGib": 24576 },
   "price": { "min": 0.01, "median": 0.05, "max": 0.4 } | null }
 ```
+
+Deployments running the dev demand simulator (`ATLAS_DEV_REQUESTORS`, dev only — never production) additionally include a `demandSim` block: per-requestor state with simulated spending, per-dummy-provider earnings, and their totals. It is not part of the protocol.
 
 The service also serves a static human-facing dashboard (the built `web/` bundle) on all non-`/v1` paths; this UI is an ordinary API client and not part of the protocol.
 

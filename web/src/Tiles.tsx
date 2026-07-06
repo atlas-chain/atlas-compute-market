@@ -1,5 +1,5 @@
 import type { Stats } from "./api";
-import { fmtGib, fmtInt, fmtPrice } from "./format";
+import { fmtGib, fmtGlm, fmtInt, fmtPrice } from "./format";
 
 export function Tiles({ stats }: { stats: Stats | null }) {
   const t = (v: string | number | null | undefined) => (v === null || v === undefined ? "—" : v);
@@ -15,6 +15,18 @@ export function Tiles({ stats }: { stats: Stats | null }) {
           <span className="k">providers live</span>
           <span className="v">{t(stats && fmtInt(stats.providers.active))}</span>
         </div>
+        {stats?.providers.free !== undefined && (
+          <div className="tile good">
+            <span className="k">providers free</span>
+            <span className="v">{fmtInt(stats.providers.free)}</span>
+          </div>
+        )}
+        {stats?.providers.busy !== undefined && (
+          <div className="tile accent">
+            <span className="k">providers busy</span>
+            <span className="v">{fmtInt(stats.providers.busy)}</span>
+          </div>
+        )}
         <div className="tile">
           <span className="k">offers active</span>
           <span className="v">{t(stats && fmtInt(stats.offers.active))}</span>
@@ -50,6 +62,15 @@ export function Tiles({ stats }: { stats: Stats | null }) {
             {stats?.price ? `${fmtPrice(stats.price.min)}–${fmtPrice(stats.price.max)}` : "—"}
           </span>
         </div>
+        {stats?.demandSim && (
+          <div className="tile">
+            <span className="k">sim spend = earnings</span>
+            <span className="v">
+              {fmtGlm(stats.demandSim.totals.spent)}
+              <span className="u">{stats.unit}</span>
+            </span>
+          </div>
+        )}
       </div>
     </section>
   );

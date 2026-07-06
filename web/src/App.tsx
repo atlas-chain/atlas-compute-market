@@ -2,8 +2,10 @@ import { api } from "./api";
 import { usePoll } from "./usePoll";
 import { Tiles } from "./Tiles";
 import { ProvidersTable } from "./ProvidersTable";
+import { ProviderCard } from "./ProviderCard";
 import { OffersTable } from "./OffersTable";
 import { DemandTable } from "./DemandTable";
+import { RequestorCard } from "./RequestorCard";
 import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 
 export default function App() {
@@ -43,8 +45,10 @@ export default function App() {
         <Tiles stats={stats} />
         <Routes>
           <Route path="/providers" element={<ProvidersTable />} />
+          <Route path="/providers/:id" element={<ProviderCard stats={stats} unit={spec?.unit ?? "GLM"} />} />
           <Route path="/offers" element={<OffersTable unit={spec?.unit ?? "GLM"} />} />
           <Route path="/demand" element={<DemandTable demand={stats?.demandSim ?? null} unit={spec?.unit ?? "GLM"} />} />
+          <Route path="/requestors/:id" element={<RequestorCard demand={stats?.demandSim ?? null} unit={spec?.unit ?? "GLM"} />} />
           <Route path="*" element={<Navigate to="/providers" replace />} />
         </Routes>
       </main>

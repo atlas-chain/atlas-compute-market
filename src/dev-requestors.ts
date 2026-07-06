@@ -136,13 +136,45 @@ export interface DevRequestorState {
     untilIso: string;
   } | null;
   counters: { queries: number; matches: number; noMatch: number; probeRejected: number; bugs: number };
+  /** Simulated GLM spent on COMPLETED jobs since service start (price/h × run time). */
+  spent: number;
   updatedAt: string;
 }
 
+/** What one dummy provider has earned from completed simulated jobs (mirror of `spent`). */
+export interface DevProviderEarnings {
+  providerId: string;
+  displayName: string;
+  earned: number;
+  jobs: number;
+  lastJobAt: string;
+}
+
 const states = new Map<string, DevRequestorState>();
+const earnings = new Map<string, DevProviderEarnings>();
 
 export function devRequestorSnapshot(): DevRequestorState[] {
   return [...states.values()].sort((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+export function devSimEarnings(): DevProviderEarnings[] {
+  return [...earnings.values()].sort((a, b) => b.earned - a.earned);
+}
+
+/**
+ * Settle a completed simulated job: the requestor's spend and the provider's
+ * earnings are two views of the same event, so `Σ spent === Σ earned` holds by
+ * construction. Simulated money only — accrued on completion, in-memory,
+ * resets with the process (like all sim state).
+ */
+function settleJob(st: DevRequestorState, providerId: string, providerName: string, pricePerHour: string, runMs: number): void {
+  const cost = (Number(pricePerHour) * runMs) / 3_600_000;
+  st.spent += cost;
+  const e = earnings.get(providerId) ?? { providerId, displayName: providerName, earned: 0, jobs: 0, lastJobAt: "" };
+  e.earned += cost;
+  e.jobs += 1;
+  e.lastJobAt = toIso(Date.now());
+  earnings.set(providerId, e);
 }
 
 // ---- the loop ---------------------------------------------------------------
@@ -297,11 +329,13 @@ export function startDevRequestors(n: number, baseUrl: string): () => void {
 
     st.counters.matches += 1;
     const runMs = randIn(p.shape.runMs);
+    const providerId = hired.item.template.envelope.payload.providerId as string;
+    const pricePerHour = (hired.item.terms!.envelope.payload as { minPricePerHour: string }).minPricePerHour;
     st.match = {
-      providerId: hired.item.template.envelope.payload.providerId as string,
+      providerId,
       providerName: hired.info.displayName,
       offerId: hired.item.offerId,
-      pricePerHour: (hired.item.terms!.envelope.payload as { minPricePerHour: string }).minPricePerHour,
+      pricePerHour,
       sinceIso: toIso(now),
       untilIso: toIso(now + runMs),
     };
@@ -310,6 +344,7 @@ export function startDevRequestors(n: number, baseUrl: string): () => void {
     void postAvailability(baseUrl, hired.item.offerId, hired.info.priv, false, runMs + 30_000);
     schedule(() => {
       void postAvailability(baseUrl, hired.item.offerId, hired.info.priv, true, 0); // job done — release
+      settleJob(st, providerId, hired.info.displayName, pricePerHour, runMs);
       st.match = null;
       touch("idle");
       schedule(() => step(p, st), randIn(p.shape.idleMs));
@@ -331,6 +366,7 @@ export function startDevRequestors(n: number, baseUrl: string): () => void {
       status: "idle",
       match: null,
       counters: { queries: 0, matches: 0, noMatch: 0, probeRejected: 0, bugs: 0 },
+      spent: 0,
       updatedAt: toIso(Date.now()),
     };
     states.set(p.requestorId, st);
@@ -342,5 +378,6 @@ export function startDevRequestors(n: number, baseUrl: string): () => void {
     for (const timer of timers) clearTimeout(timer);
     timers.clear();
     states.clear();
+    earnings.clear();
   };
 }

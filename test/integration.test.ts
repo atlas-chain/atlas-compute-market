@@ -99,8 +99,14 @@ describe.skipIf(!docker)("end-to-end provider → requestor flow", () => {
   test("provider profile shows attestation summary and active offer", async () => {
     const body = await jsonOf(await fetch(`${BASE}/v1/providers/${flow.providerId}`));
     expect(body.attestation.id).toBe(flow.attestation.attestationId);
+    expect(body.attestation.coreCount).toBe(2);
     expect(body.stats.activeOffers).toBe(1);
+    expect(body.stats.liveOffers).toBe(1);
+    expect(body.stats.busyOffers).toBe(0);
     expect(body.stats.lastSeenAt).not.toBeNull();
+    // the provider's active offers are listed with their live state
+    expect(body.offers.length).toBe(1);
+    expect(body.offers[0]).toMatchObject({ offerId: flow.offerId, status: "active", minPricePerHour: "0.05" });
   });
 
   test("provider directory lists the provider with live-offer count", async () => {
@@ -110,6 +116,7 @@ describe.skipIf(!docker)("end-to-end provider → requestor flow", () => {
     expect(p).toBeDefined();
     expect(p.activeOffers).toBe(1);
     expect(p.liveOffers).toBe(1);
+    expect(p.busyOffers).toBe(0);
     expect(p.attestation.scores.full).toBeGreaterThan(0);
     expect(p.lastSeenAt).not.toBeNull();
   });
@@ -117,7 +124,7 @@ describe.skipIf(!docker)("end-to-end provider → requestor flow", () => {
   test("stats aggregates cover providers, offers, capacity, and price", async () => {
     const body = await jsonOf(await fetch(`${BASE}/v1/stats`));
     expect(body.unit).toBe("GLM");
-    expect(body.providers).toEqual({ total: 1, active: 1 });
+    expect(body.providers).toEqual({ total: 1, active: 1, busy: 0, free: 1 });
     expect(body.offers).toEqual({ active: 1, live: 1, busy: 0 });
     expect(body.attestations.valid).toBe(1);
     expect(body.capacity.liveCores).toBe(2);
@@ -226,6 +233,12 @@ describe.skipIf(!docker)("end-to-end provider → requestor flow", () => {
     expect(any.items.length).toBe(1);
     expect(any.items[0].status).toBe("busy");
     expect((await jsonOf(await fetch(`${BASE}/v1/offers/${flow.offerId}`))).status).toBe("busy");
+    // the provider views agree: directory and detail count the busy offer
+    const dir = await jsonOf(await fetch(`${BASE}/v1/providers`));
+    expect(dir.items.find((i: any) => i.providerId === flow.providerId).busyOffers).toBe(1);
+    const detail = await jsonOf(await fetch(`${BASE}/v1/providers/${flow.providerId}`));
+    expect(detail.stats.busyOffers).toBe(1);
+    expect(detail.offers[0].status).toBe("busy");
 
     // a non-increasing seq is rejected
     const regress = await setAvailability(BASE, flow.offerId, priv, true, { seq: 100 });
