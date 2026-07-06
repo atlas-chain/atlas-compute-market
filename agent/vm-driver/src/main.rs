@@ -9,6 +9,8 @@
 //!
 //! The image must declare `VOLUME /exchange` (agent/Dockerfile does).
 
+mod provision;
+
 use anyhow::{anyhow, bail, Context as _};
 use futures::future::BoxFuture;
 use futures::FutureExt;
@@ -21,13 +23,19 @@ use ya_runtime_api::server::{self, ProcessStatus, RuntimeControl, RuntimeHandler
 const USAGE: &str = "\
 atlas-vm-driver — run the offline provider agent inside ya-runtime-vm
 
+Self-contained: with no --runtime/--image it downloads the pinned ya-runtime-vm
+release and the published provider image into a cache dir, then registers.
+
 USAGE:
-  atlas-vm-driver --runtime PATH --image PATH --workdir DIR [OPTIONS] [-- AGENT_ARGS...]
+  atlas-vm-driver [OPTIONS] [-- AGENT_ARGS...]
 
 OPTIONS:
-  --runtime PATH      ya-runtime-vm binary (from the release tarball)
-  --image PATH        provider .gvmi image (gvmkit-build output)
-  --workdir DIR       working directory for the deployment (created)
+  --runtime PATH      ya-runtime-vm binary (default: auto-download the release)
+  --image PATH        provider .gvmi image (default: auto-download by --image-hash)
+  --image-hash HASH   Golem SDK image hash to fetch + verify (SHA3-224)
+  --runtime-url URL   ya-runtime-vm release tarball to fetch when --runtime is unset
+  --cache-dir DIR     download/identity cache (default: ~/.cache/atlas-vm-driver)
+  --workdir DIR       deployment dir / identity (default: <cache-dir>/workdir)
   --base-url URL      registry to relay to (default https://compute-market.arkiv-global.net)
   --cpu-cores N       VM logical cores (default 2); also the declared CORE_COUNT
   --mem-gib N         VM RAM in GiB (default 2); also the declared RAM_GIB
@@ -44,6 +52,9 @@ const RELAY_POLL: std::time::Duration = std::time::Duration::from_millis(10);
 struct Args {
     runtime: PathBuf,
     image: PathBuf,
+    image_hash: String,
+    runtime_url: String,
+    cache_dir: PathBuf,
     workdir: PathBuf,
     base_url: String,
     cpu_cores: u32,
@@ -57,6 +68,9 @@ fn parse_args() -> anyhow::Result<Args> {
     let mut args = Args {
         runtime: PathBuf::new(),
         image: PathBuf::new(),
+        image_hash: provision::DEFAULT_IMAGE_HASH.to_string(),
+        runtime_url: provision::DEFAULT_RUNTIME_URL.to_string(),
+        cache_dir: PathBuf::new(),
         workdir: PathBuf::new(),
         base_url: DEFAULT_BASE_URL.to_string(),
         cpu_cores: 2,
@@ -75,6 +89,9 @@ fn parse_args() -> anyhow::Result<Args> {
             }
             "--runtime" => args.runtime = val("--runtime")?.into(),
             "--image" => args.image = val("--image")?.into(),
+            "--image-hash" => args.image_hash = val("--image-hash")?,
+            "--runtime-url" => args.runtime_url = val("--runtime-url")?,
+            "--cache-dir" => args.cache_dir = val("--cache-dir")?.into(),
             "--workdir" => args.workdir = val("--workdir")?.into(),
             "--base-url" => args.base_url = val("--base-url")?,
             "--cpu-cores" => args.cpu_cores = val("--cpu-cores")?.parse().context("--cpu-cores")?,
@@ -92,12 +109,26 @@ fn parse_args() -> anyhow::Result<Args> {
             other => bail!("unknown flag {other}\n\n{USAGE}"),
         }
     }
-    for (flag, p) in [("--runtime", &args.runtime), ("--image", &args.image), ("--workdir", &args.workdir)] {
-        if p.as_os_str().is_empty() {
-            bail!("{flag} is required\n\n{USAGE}");
-        }
-    }
     Ok(args)
+}
+
+/// Fill in any path not given on the CLI by provisioning it into the cache dir.
+fn provision(args: &mut Args) -> anyhow::Result<()> {
+    if args.cache_dir.as_os_str().is_empty() {
+        args.cache_dir = provision::default_cache_dir();
+    }
+    std::fs::create_dir_all(&args.cache_dir)
+        .with_context(|| format!("creating cache dir {}", args.cache_dir.display()))?;
+    if args.workdir.as_os_str().is_empty() {
+        args.workdir = args.cache_dir.join("workdir");
+    }
+    if args.runtime.as_os_str().is_empty() {
+        args.runtime = provision::ensure_runtime(&args.cache_dir, &args.runtime_url)?;
+    }
+    if args.image.as_os_str().is_empty() {
+        args.image = provision::ensure_image(&args.cache_dir, &args.image_hash)?;
+    }
+    Ok(())
 }
 
 /// Common CLI prefix for both `deploy` and `start` runtime invocations.
@@ -283,6 +314,7 @@ fn agent_process(args: &Args) -> server::RunProcess {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     let mut args = parse_args()?;
+    provision(&mut args)?;
 
     let exchange = deploy(&mut args)?;
     println!("[driver] deployed; exchange dir: {}", exchange.display());

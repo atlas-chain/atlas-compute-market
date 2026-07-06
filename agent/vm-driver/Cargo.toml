@@ -15,3 +15,5 @@ futures = "0.3"
 anyhow = "1"
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }
+# content-verify the downloaded .gvmi: the Golem SDK image hash is its SHA3-224
+sha3 = "0.10"

@@ -76,27 +76,35 @@ protocol as `manager.py`). The VM has **no network interface at all** — the
 image must declare `VOLUME /exchange` (this Dockerfile does), which the
 runtime 9p-mounts from the host.
 
+The driver is **self-contained**: with no `--runtime`/`--image` it downloads
+the pinned ya-runtime-vm release and the published provider image (verified by
+its SHA3-224 content hash) into a cache dir, then registers. All you need is
+the binary and `/dev/kvm` access:
+
 ```sh
-# once: fetch the runtime (needs /dev/kvm access, e.g. membership in the kvm group)
-curl -sL https://github.com/golemfactory/ya-runtime-vm/releases/download/v0.5.3/ya-runtime-vm-linux-v0.5.3.tar.gz | tar xz
 # once: build the driver (protoc required: apt install protobuf-compiler)
 cargo build --release --manifest-path agent/vm-driver/Cargo.toml
-# build the .gvmi (or download the one published by the GitHub action)
-docker build -t atlas-agent agent/ && gvmkit-build atlas-agent:latest
 
+# register — downloads runtime + image on first run, caches them after
 agent/vm-driver/target/release/atlas-vm-driver \
-  --runtime ya-runtime-vm-linux-v0.5.3/ya-runtime-vm/ya-runtime-vm \
-  --image atlas-agent-latest-<id>.gvmi \
-  --workdir ./vm-workdir --cpu-cores 4 --mem-gib 8 \
+  --cpu-cores 4 --mem-gib 8 \
   --env DISPLAY_NAME=my-vm-node -- --once
 ```
 
 `--cpu-cores` / `--mem-gib` size the VM and thereby the declared/benchmarked
-capability. The workdir keeps the deployment and the exchange volume (with
-`provider.key`) across runs — the driver reuses it, so restarts keep the same
-identity and live attestation; delete the workdir for a fresh identity. The
-driver pins the exact `ya-runtime-api` revision used by ya-runtime-vm v0.5.3,
-so the stdio protocol matches the release binary.
+capability. Downloads and identity live under `~/.cache/atlas-vm-driver`
+(`--cache-dir` to change): the runtime tarball, the `<hash>.gvmi`, and a
+`workdir/` holding the deployment and exchange volume (with `provider.key`).
+The driver reuses the workdir, so restarts keep the same identity and live
+attestation; delete `<cache-dir>/workdir` for a fresh identity. It pins the
+exact `ya-runtime-api` revision used by ya-runtime-vm v0.5.3, so the stdio
+protocol matches the release binary.
+
+Overrides: `--image-hash HASH` (a different published image), `--image PATH`
+(a local `.gvmi`, e.g. from `docker build -t atlas-agent agent/ && gvmkit-build
+atlas-agent:latest`), `--runtime PATH` (a local ya-runtime-vm binary), or
+`--runtime-url URL`. `/dev/kvm` must be accessible (e.g. membership in the
+`kvm` group).
 
 ## GVMI image (Golem registry)
 
