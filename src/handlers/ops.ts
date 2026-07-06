@@ -54,6 +54,9 @@ export async function getStats(req: Request, server: Server<unknown>): Promise<R
              (select count(*) from offers where revoked_at is null and expires_at > now())::int as active_offers,
              (select count(*) from attestations where expires_at > now())::int as attestations`;
 
+    // busy = live offers a provider has flagged taken (avail/v1, §6.5)
+    const busyOffers = live.length === 0 ? 0 : (await redis.busyBatch(live.map(([id]) => id))).size;
+
     const prices = live.map(([, p]) => Number(p)).sort((a, b) => a - b);
     const median =
       prices.length === 0
@@ -73,7 +76,7 @@ export async function getStats(req: Request, server: Server<unknown>): Promise<R
       at: Math.floor(now / 1000),
       unit: config.unit,
       providers: { total: totals.providers, active: liveProviders },
-      offers: { active: totals.active_offers, live: live.length },
+      offers: { active: totals.active_offers, live: live.length, busy: busyOffers },
       attestations: { valid: totals.attestations },
       capacity: { liveCores, liveRamGib },
       price: prices.length === 0 ? null : { min: prices[0]!, median, max: prices[prices.length - 1]! },

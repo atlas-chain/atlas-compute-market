@@ -4,7 +4,9 @@ import { fmtInt, shortHex, untilShort } from "./format";
 
 const PAGE = 25;
 
-const DEFAULT_FILTERS: OfferFilters = { freshness: "normal", sort: "price" };
+// availability defaults to "any" here so the dashboard *shows* busy offers
+// (marked), rather than hiding them as a rent-focused client would (§6.5).
+const DEFAULT_FILTERS: OfferFilters = { freshness: "normal", availability: "any", sort: "price" };
 
 function OfferRow({ o }: { o: OfferItem }) {
   const att = o.attestation.envelope.payload;
@@ -111,6 +113,13 @@ export function OffersTable({ unit }: { unit: string }) {
               <option value="strict">strict</option>
               <option value="normal">normal</option>
               <option value="any">any (incl. stale)</option>
+            </select>
+          </label>
+          <label className="f">
+            <span>availability</span>
+            <select value={filters.availability} onChange={set("availability")}>
+              <option value="any">any (incl. busy)</option>
+              <option value="free">free only</option>
             </select>
           </label>
           <label className="f">

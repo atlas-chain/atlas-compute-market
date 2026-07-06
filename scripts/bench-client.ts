@@ -31,6 +31,32 @@ function envelope(payload: Record<string, unknown>, priv: Uint8Array) {
   return { payload, signature: signPayload(payload, priv) };
 }
 
+/**
+ * Optional busy signal (avail/v1, §6.5): call with available=false when a job
+ * is accepted off-registry so the registry hides this offer from default
+ * queries, and available=true (or let it lapse) when the job ends. seq must
+ * strictly increase per offer; a wall-clock ms is a convenient monotonic seq.
+ */
+export async function setAvailability(
+  baseUrl: string,
+  offerId: string,
+  priv: Uint8Array,
+  available: boolean,
+  opts: { seq?: number; busyForMs?: number } = {},
+): Promise<{ status: number; body: any }> {
+  const now = Date.now();
+  const payload = {
+    type: "avail/v1",
+    providerId: addressFromPrivateKey(priv),
+    offerId,
+    seq: opts.seq ?? now,
+    available,
+    signedAt: toIso(now),
+    validUntil: toIso(now + Math.min(opts.busyForMs ?? 600_000, 3_600_000)),
+  };
+  return post(`${baseUrl}/v1/offers/${offerId}/availability`, envelope(payload, priv));
+}
+
 export async function runProviderFlow(opts: ClientOptions) {
   const log = opts.log ?? console.log;
   const providerId = addressFromPrivateKey(opts.priv);

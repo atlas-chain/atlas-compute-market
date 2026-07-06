@@ -118,7 +118,7 @@ describe.skipIf(!docker)("end-to-end provider → requestor flow", () => {
     const body = await jsonOf(await fetch(`${BASE}/v1/stats`));
     expect(body.unit).toBe("GLM");
     expect(body.providers).toEqual({ total: 1, active: 1 });
-    expect(body.offers).toEqual({ active: 1, live: 1 });
+    expect(body.offers).toEqual({ active: 1, live: 1, busy: 0 });
     expect(body.attestations.valid).toBe(1);
     expect(body.capacity.liveCores).toBe(2);
     expect(body.capacity.liveRamGib).toBe(16);
@@ -201,6 +201,43 @@ describe.skipIf(!docker)("end-to-end provider → requestor flow", () => {
     });
     expect(res.status).toBe(400);
     expect((await jsonOf(res)).error.code).toBe("SIG_MISMATCH");
+  });
+
+  test("busy signal (avail/v1) hides the offer from default queries, then clears", async () => {
+    const { setAvailability } = await import("../scripts/bench-client.ts");
+    const { hexToBytes } = await import("../src/crypto.ts");
+    const priv = hexToBytes("0000000000000000000000000000000000000000000000000000000000000002");
+
+    // baseline: offer is active and visible under the default (free) availability
+    const before = await jsonOf(await fetch(`${BASE}/v1/offers?cores.min=2&price.perHour.max=0.10`));
+    expect(before.items.length).toBe(1);
+    expect(before.items[0].status).toBe("active");
+
+    // provider flags itself busy
+    const busy = await setAvailability(BASE, flow.offerId, priv, false, { seq: 100, busyForMs: 600_000 });
+    expect(busy.status).toBe(200);
+    expect(busy.body).toMatchObject({ ok: true, available: false });
+
+    // default query (availability=free) now omits it…
+    const free = await jsonOf(await fetch(`${BASE}/v1/offers?cores.min=2&price.perHour.max=0.10`));
+    expect(free.items.length).toBe(0);
+    // …but availability=any surfaces it, marked busy; the detail endpoint agrees
+    const any = await jsonOf(await fetch(`${BASE}/v1/offers?cores.min=2&price.perHour.max=0.10&availability=any`));
+    expect(any.items.length).toBe(1);
+    expect(any.items[0].status).toBe("busy");
+    expect((await jsonOf(await fetch(`${BASE}/v1/offers/${flow.offerId}`))).status).toBe("busy");
+
+    // a non-increasing seq is rejected
+    const regress = await setAvailability(BASE, flow.offerId, priv, true, { seq: 100 });
+    expect(regress.status).toBe(409);
+    expect(regress.body.error.code).toBe("SEQ_REGRESSION");
+
+    // clearing restores availability
+    const clear = await setAvailability(BASE, flow.offerId, priv, true, { seq: 101 });
+    expect(clear.status).toBe(200);
+    const after = await jsonOf(await fetch(`${BASE}/v1/offers?cores.min=2&price.perHour.max=0.10`));
+    expect(after.items.length).toBe(1);
+    expect(after.items[0].status).toBe("active");
   });
 
   test("revocation removes the offer from liveness; status becomes revoked", async () => {

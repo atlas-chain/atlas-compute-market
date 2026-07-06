@@ -28,7 +28,7 @@
  * surfaces through GET /v1/stats as `demandSim` when the flag is set.
  */
 import { config } from "./config.ts";
-import { keccak256, addressFromPrivateKey, recoverSigner } from "./crypto.ts";
+import { keccak256, addressFromPrivateKey, recoverSigner, signPayload } from "./crypto.ts";
 import { toIso } from "./validate.ts";
 import { devProviderDirectory, type DevProviderInfo } from "./dev-seed.ts";
 
@@ -149,6 +149,37 @@ export function devRequestorSnapshot(): DevRequestorState[] {
 
 const rand = (lo: number, hi: number) => lo + Math.random() * (hi - lo);
 const randIn = ([lo, hi]: [number, number]) => rand(lo, hi);
+
+/**
+ * Post the provider-side busy signal (avail/v1, §6.5) for an offer the sim just
+ * hired/released. In a real market the PROVIDER posts this on accepting a job;
+ * here the sim signs with the dummy persona's key (a dev-only shortcut) so the
+ * feature is exercised end-to-end and other requestors skip the taken machine.
+ * Fire-and-forget — a failure just means the offer isn't hidden this round.
+ */
+async function postAvailability(
+  baseUrl: string,
+  offerId: string,
+  priv: Uint8Array,
+  available: boolean,
+  busyForMs: number,
+): Promise<void> {
+  const now = Date.now();
+  const payload = {
+    type: "avail/v1",
+    providerId: addressFromPrivateKey(priv),
+    offerId,
+    seq: now,
+    available,
+    signedAt: toIso(now),
+    validUntil: toIso(now + Math.min(Math.max(busyForMs, 1000), config.availMaxValidityMs)),
+  };
+  await fetch(`${baseUrl}/v1/offers/${offerId}/availability`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ payload, signature: signPayload(payload, priv) }),
+  }).catch(() => {});
+}
 
 type QueryResult = { items: WireOfferItem[] } | { retryAfterMs: number } | { error: string };
 
@@ -275,7 +306,10 @@ export function startDevRequestors(n: number, baseUrl: string): () => void {
       untilIso: toIso(now + runMs),
     };
     touch("running");
+    // machine is taken now — flag it busy so peers skip it (auto-clears if we die)
+    void postAvailability(baseUrl, hired.item.offerId, hired.info.priv, false, runMs + 30_000);
     schedule(() => {
+      void postAvailability(baseUrl, hired.item.offerId, hired.info.priv, true, 0); // job done — release
       st.match = null;
       touch("idle");
       schedule(() => step(p, st), randIn(p.shape.idleMs));

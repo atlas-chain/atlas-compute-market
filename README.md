@@ -65,7 +65,11 @@ bun run build      # emits web/dist for the registry to serve
 
 With no real providers around, seed dummy ones (fake attestations + heartbeats — dev only): `ATLAS_DEV_SEED=10 bun start`.
 
-To also simulate demand, add `ATLAS_DEV_REQUESTORS=6`: N simulated requestors run the spec §9 flow against the real API (query with their job shape's filters, verify all envelope signatures client-side, simulate the P2P hire probe) and only ever "hire" the dev dummies — real matching stays peer-to-peer and off-registry. Their state shows up as a **Demand (sim)** page in the dashboard, and any signature/filter/liveness violation they observe is logged as a `BUG` (they double as a continuous end-to-end check of the read path).
+To also simulate demand, add `ATLAS_DEV_REQUESTORS=6`: N simulated requestors run the spec §9 flow against the real API (query with their job shape's filters, verify all envelope signatures client-side, simulate the P2P hire probe) and only ever "hire" the dev dummies — real matching stays peer-to-peer and off-registry. Their state shows up as a **Demand (sim)** page in the dashboard, and any signature/filter/liveness violation they observe is logged as a `BUG` (they double as a continuous end-to-end check of the read path). When a simulated requestor hires a dummy it posts that provider's optional **busy** signal (`avail/v1`, §6.5), so those offers show `status: "busy"` and drop out of default (`availability=free`) queries until the job ends.
+
+### Optional busy signal
+
+A provider that accepts a job off-registry can take itself out of default search results without revoking its offer, so requestors don't waste a P2P probe on a taken machine: `POST /v1/offers/{offerId}/availability` with a provider-signed `avail/v1` `{ available: false, validUntil }` (spec §6.5). It's advisory (the registry only relays the provider's signature), ephemeral (auto-clears at `validUntil`, so a crash can't strand the offer), and entirely optional — a provider that never calls it behaves exactly as before. `available: true` clears it early. Requestors pass `availability=any` to `GET /v1/offers` to see busy offers (marked `status: "busy"`) instead of having them hidden.
 
 ## Layout
 

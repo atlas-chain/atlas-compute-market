@@ -52,6 +52,10 @@ export async function getOffers(req: Request, server: Server<unknown>): Promise<
 
   const freshness = (url.searchParams.get("freshness") ?? "normal") as Freshness;
   if (!["strict", "normal", "any"].includes(freshness)) throw err("VALIDATION", "freshness must be strict|normal|any");
+  // availability (§6.5): hide provider-flagged-busy offers by default so requestors
+  // don't waste a P2P probe on a taken machine; `any` includes them (marked busy).
+  const availability = (url.searchParams.get("availability") ?? "free") as "free" | "any";
+  if (!["free", "any"].includes(availability)) throw err("VALIDATION", "availability must be free|any");
   const sort = (url.searchParams.get("sort") ?? "random") as Sort;
   if (!SORTS.includes(sort)) throw err("VALIDATION", `sort must be one of ${SORTS.join("|")}`);
   const limit = Math.min(Math.max(1, numParam(url, "limit") ?? config.queryDefaultLimit), config.queryMaxLimit);
@@ -104,9 +108,9 @@ export async function getOffers(req: Request, server: Server<unknown>): Promise<
   // liveness + price pass against current DynamicTerms (§8.4, §14)
   const now = Date.now();
   const ids = candidates.map((r) => bufToHex(r.offer_id));
-  const termsMap = await redis.getTermsBatch(ids);
+  const [termsMap, busySet] = await Promise.all([redis.getTermsBatch(ids), redis.busyBatch(ids)]);
 
-  type Enriched = { row: OfferRow & Record<string, unknown>; id: string; price: number | null; live: boolean };
+  type Enriched = { row: OfferRow & Record<string, unknown>; id: string; price: number | null; live: boolean; busy: boolean };
   const enriched: Enriched[] = [];
   for (const row of candidates) {
     const id = bufToHex(row.offer_id);
@@ -121,7 +125,9 @@ export async function getOffers(req: Request, server: Server<unknown>): Promise<
     }
     if (freshness !== "any" && !fresh) continue;
     if (priceMax !== null && (price === null || price > Number(priceMax))) continue;
-    enriched.push({ row, id, price, live: terms !== null });
+    const busy = terms !== null && busySet.has(id);
+    if (availability === "free" && busy) continue; // taken — skip so requestors don't probe it (§6.5)
+    enriched.push({ row, id, price, live: terms !== null, busy });
   }
 
   // deterministic ordering; random uses a per-query seed carried in the cursor (§8.4)
@@ -153,14 +159,14 @@ export async function getOffers(req: Request, server: Server<unknown>): Promise<
   const offset = cursor?.offset ?? 0;
   const page = enriched.slice(offset, offset + limit);
   const items = await Promise.all(
-    page.map(async ({ row, id }) => {
+    page.map(async ({ row, id, busy }) => {
       const terms = termsMap.get(id) ?? null;
       return {
         offerId: id,
         template: envelopeOut(fromJsonb(row.template), bufToHex(row.tpl_sig), row.created_at),
         attestation: envelopeOut(fromJsonb(row.att_payload), bufToHex(row.att_sig), row.att_received),
         terms: terms ? { envelope: terms.envelope, meta: { hash: null, receivedAt: terms.receivedAt } } : null,
-        status: offerStatus(row, terms !== null, now),
+        status: offerStatus(row, terms !== null, busy, now),
       };
     }),
   );

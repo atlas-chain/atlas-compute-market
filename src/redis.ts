@@ -4,6 +4,8 @@
  * Keys:
  *   terms:{offerId}      JSON {envelope, receivedAt}   PX freshness window (§10)
  *   seq:{offerId}        last accepted seq             no expiry, rebuilt lazily
+ *   busy:{offerId}       "1" while provider-flagged taken  PX validUntil (§6.5)
+ *   availseq:{offerId}   last accepted avail/v1 seq   no expiry, rebuilt lazily
  *   bench:{challengeId}  JSON challenge state          PX challenge deadline
  *   rl:{scope}:{key}:{w} fixed-window counters
  *   live:offers          ZSET offerId → effective expiry (unix ms)
@@ -97,9 +99,47 @@ export const redis = {
   },
 
   async dropOffer(offerId: string): Promise<void> {
-    await send("DEL", [`terms:${offerId}`, `seq:${offerId}`]);
+    await send("DEL", [`terms:${offerId}`, `seq:${offerId}`, `busy:${offerId}`, `availseq:${offerId}`]);
     await send("ZREM", ["live:offers", offerId]);
     await send("HDEL", ["live:prices", offerId]);
+  },
+
+  // ---- availability (avail/v1 busy hint, §6.5) --------------------------
+
+  /** Mark an offer busy until its validUntil; the key auto-expires (self-healing). */
+  async setBusy(offerId: string, pxMs: number): Promise<boolean> {
+    const px = String(Math.max(1, Math.floor(pxMs)));
+    return (await send("SET", [`busy:${offerId}`, "1", "PX", px])) !== null;
+  },
+
+  async clearBusy(offerId: string): Promise<void> {
+    await send("DEL", [`busy:${offerId}`]);
+  },
+
+  async isBusy(offerId: string): Promise<boolean> {
+    return (await send("EXISTS", [`busy:${offerId}`])) === 1;
+  },
+
+  /** Set of offerIds currently flagged busy (degraded → empty). */
+  async busyBatch(offerIds: string[]): Promise<Set<string>> {
+    const out = new Set<string>();
+    if (offerIds.length === 0) return out;
+    const raw = (await send("MGET", offerIds.map((id) => `busy:${id}`))) as (string | null)[] | null;
+    if (!raw) return out;
+    raw.forEach((v, i) => {
+      if (v !== null) out.add(offerIds[i]!);
+    });
+    return out;
+  },
+
+  /** avail/v1 seq — own namespace so it never collides with terms seq. */
+  async getAvailSeq(offerId: string): Promise<number | null> {
+    const v = (await send("GET", [`availseq:${offerId}`])) as string | null;
+    return v === null ? null : Number(v);
+  },
+
+  async setAvailSeq(offerId: string, seq: number): Promise<void> {
+    await send("SET", [`availseq:${offerId}`, String(seq)]);
   },
 
   /** Current live set with prices; prunes expired members as it goes. */

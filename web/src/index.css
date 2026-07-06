@@ -160,6 +160,7 @@ tr.detail td {
   padding: 2px 9px; border-radius: 99px; background: var(--stone-2); color: var(--ink);
 }
 .pill.active { background: var(--ok); color: #fff; }
+.pill.busy { background: var(--ark-blue); color: #fff; }
 .pill.stale { background: var(--amber); color: #fff; }
 .pill.revoked, .pill.expired { background: var(--red); color: #fff; }
 

@@ -23,6 +23,12 @@ export function Tiles({ stats }: { stats: Stats | null }) {
           <span className="k">offers live</span>
           <span className="v">{t(stats && fmtInt(stats.offers.live))}</span>
         </div>
+        {stats?.offers.busy !== undefined && stats.offers.busy > 0 && (
+          <div className="tile">
+            <span className="k">offers busy</span>
+            <span className="v">{fmtInt(stats.offers.busy)}</span>
+          </div>
+        )}
         <div className="tile accent">
           <span className="k">live cores</span>
           <span className="v">{t(stats && fmtInt(stats.capacity.liveCores))}</span>

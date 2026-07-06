@@ -36,6 +36,7 @@ export const config = {
   attestationTtlMs: num("ATLAS_ATTESTATION_TTL_DAYS", 30) * 86_400_000,
   templateMaxAheadMs: 180 * 86_400_000, // §6.2
   termsMaxValidityMs: 3_600_000, // §6.3
+  availMaxValidityMs: 3_600_000, // §6.5 — busy auto-clears after this at most; provider re-posts to extend
   signedAtMaxFutureMs: 120_000, // §3.6
   offerCapPerProvider: num("ATLAS_OFFER_CAP", 50),
   heartbeatMin: 15,
@@ -60,6 +61,7 @@ export const config = {
   // rate limits (§12): [max, windowMs]
   rl: {
     templatePerProvider: [20, 3_600_000] as const,
+    availPerOffer: [10, 60_000] as const, // §12 — busy/free toggles are job-start/stop events, not a stream
     profilePerProvider: [6, 3_600_000] as const,
     challengePerProvider: [4, 86_400_000] as const,
     challengePerIp: [20, 86_400_000] as const,

@@ -37,7 +37,7 @@ export interface Stats {
   at: number;
   unit: string;
   providers: { total: number; active: number };
-  offers: { active: number; live: number };
+  offers: { active: number; live: number; busy?: number };
   attestations: { valid: number };
   capacity: { liveCores: number; liveRamGib: number };
   price: { min: number; median: number; max: number } | null;
@@ -80,7 +80,7 @@ export interface Envelope<P = Record<string, unknown>> {
   meta: { hash: string | null; receivedAt: string };
 }
 
-export type OfferStatus = "active" | "stale" | "expired" | "revoked";
+export type OfferStatus = "active" | "busy" | "stale" | "expired" | "revoked";
 
 export interface OfferItem {
   offerId: string;
@@ -118,6 +118,7 @@ export interface OfferFilters {
   "score.full.min"?: string;
   "price.perHour.max"?: string;
   freshness?: string;
+  availability?: string;
   sort?: string;
 }
 

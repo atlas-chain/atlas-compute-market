@@ -66,6 +66,13 @@ function persona(i: number): Persona {
 export interface DevProviderInfo {
   displayName: string;
   behavior: Persona["behavior"];
+  /**
+   * The persona's private key. Dev-only: it lets the requestor simulator sign
+   * a provider-side avail/v1 (§6.5) on behalf of a dummy it "hired", standing
+   * in for the real provider agent that would post its own busy signal. Never
+   * exists for real providers — the registry never holds a provider key.
+   */
+  priv: Uint8Array;
 }
 
 /**
@@ -78,7 +85,7 @@ export function devProviderDirectory(n: number): Map<string, DevProviderInfo> {
   const dir = new Map<string, DevProviderInfo>();
   for (let i = 0; i < n; i++) {
     const p = persona(i);
-    dir.set(p.providerId, { displayName: p.displayName, behavior: p.behavior });
+    dir.set(p.providerId, { displayName: p.displayName, behavior: p.behavior, priv: p.priv });
   }
   return dir;
 }

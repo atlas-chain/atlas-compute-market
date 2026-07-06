@@ -127,17 +127,24 @@ export async function findOffer(idOrKey: string): Promise<OfferRow | null> {
   return rows.length === 0 ? null : (rows[0] as OfferRow);
 }
 
-export type OfferStatus = "active" | "stale" | "expired" | "revoked";
+export type OfferStatus = "active" | "busy" | "stale" | "expired" | "revoked";
 
-export function offerStatus(row: OfferRow, hasLiveTerms: boolean, nowMs: number): OfferStatus {
+/**
+ * `busy` is an otherwise-active offer whose provider has flagged it taken
+ * (avail/v1, §6.5) — advisory only, and reported below the hard states
+ * (revoked/expired) and below staleness (no live terms means there is no
+ * machine to be busy). Absent the flag, behavior is unchanged.
+ */
+export function offerStatus(row: OfferRow, hasLiveTerms: boolean, isBusy: boolean, nowMs: number): OfferStatus {
   if (row.revoked_at) return "revoked";
   if (row.expires_at.getTime() <= nowMs) return "expired";
-  return hasLiveTerms ? "active" : "stale";
+  if (!hasLiveTerms) return "stale";
+  return isBusy ? "busy" : "active";
 }
 
 export async function offerResponse(row: OfferRow, nowMs: number) {
   const offerId = bufToHex(row.offer_id);
-  const terms = await redis.getTerms(offerId);
+  const [terms, isBusy] = await Promise.all([redis.getTerms(offerId), redis.isBusy(offerId)]);
   return {
     offerId,
     template: envelopeOut(fromJsonb(row.template), bufToHex(row.tpl_sig), row.created_at),
@@ -148,7 +155,7 @@ export async function offerResponse(row: OfferRow, nowMs: number) {
           meta: { hash: null, receivedAt: terms.receivedAt }, // hash omitted: terms are ephemeral (§6.3)
         }
       : null,
-    status: offerStatus(row, terms !== null, nowMs),
+    status: offerStatus(row, terms !== null, terms !== null && isBusy, nowMs),
   };
 }
 
@@ -249,4 +256,69 @@ export async function postRevoke(req: RouteReq): Promise<Response> {
   await redis.dropOffer(offerId);
 
   return json({ ok: true, offerId, status: "revoked" });
+}
+
+// ------------------------------------------------------------ availability
+
+/**
+ * POST /v1/offers/:offerId/availability (§6.5, §8.3) — optional busy hint.
+ *
+ * A provider that has accepted a job off-registry posts `available: false`
+ * so the registry hides this offer from default queries, sparing requestors
+ * a doomed P2P probe. Purely advisory and provider-signed: the registry only
+ * relays the claim (like liveness, §10), never asserts it. Ephemeral and
+ * self-healing — `validUntil` bounds how long the flag can persist, so a
+ * provider that crashes mid-job reappears automatically. `available: true`
+ * clears the flag early (e.g. the job finished). Never calling this endpoint
+ * leaves the offer permanently available, exactly as before this existed.
+ */
+export async function postAvailability(req: RouteReq): Promise<Response> {
+  const w = await readEnvelope(req, "avail/v1");
+  const p = w.payload;
+  const now = Date.now();
+
+  const row = await findOffer(req.params.offerId ?? "");
+  if (!row) throw err("UNKNOWN_OFFER", "offer not found");
+  const offerId = bufToHex(row.offer_id);
+
+  const [maxA, winA] = config.rl.availPerOffer;
+  const retry = await redis.rateLimit("avail", offerId, maxA, winA);
+  if (retry > 0) throw err("RATE_LIMITED", "availability toggled too often", { retryAfterMs: retry });
+
+  if (row.revoked_at) throw err("REVOKED", "offer is revoked");
+  if (row.expires_at.getTime() <= now) throw err("EXPIRED", "offer is expired");
+  if (w.signer !== bufToHex(row.provider_id)) throw err("SIG_MISMATCH", "signer is not the offer's provider");
+  if (p.offerId !== offerId) throw err("VALIDATION", "payload.offerId must match the offer", { field: "offerId" });
+  if (typeof p.available !== "boolean") throw err("VALIDATION", "available must be a boolean", { field: "available" });
+  if (typeof p.seq !== "number" || !Number.isInteger(p.seq) || p.seq < 0 || p.seq > Number.MAX_SAFE_INTEGER) {
+    throw err("VALIDATION", "seq must be a non-negative integer", { field: "seq" });
+  }
+  const signedAt = parseIso(p.signedAt);
+  const validUntil = parseIso(p.validUntil);
+  if (signedAt === null) throw err("VALIDATION", "signedAt must be ISO 8601", { field: "signedAt" });
+  if (validUntil === null) throw err("VALIDATION", "validUntil must be ISO 8601", { field: "validUntil" });
+  if (signedAt > now + config.signedAtMaxFutureMs) {
+    throw err("VALIDATION", "signedAt too far in the future", { field: "signedAt" });
+  }
+  if (validUntil - signedAt > config.availMaxValidityMs) {
+    throw err("VALIDATION", "validUntil − signedAt exceeds 3600 s (§6.5)", { field: "validUntil" });
+  }
+
+  // seq strictly increasing (own namespace); absent counter rebuilds lazily
+  const stored = await redis.getAvailSeq(offerId);
+  if (stored !== null && (p.seq as number) <= stored) {
+    throw err("SEQ_REGRESSION", `seq must exceed ${stored}`, { field: "seq" });
+  }
+  await redis.setAvailSeq(offerId, p.seq as number);
+
+  if (p.available === false) {
+    if (validUntil <= now) throw err("VALIDATION", "validUntil is already in the past", { field: "validUntil" });
+    const ttlMs = Math.min(validUntil - now, config.availMaxValidityMs);
+    const ok = await redis.setBusy(offerId, ttlMs);
+    if (!ok) throw err("INTERNAL", "liveness store unavailable (Redis absent, §2 degraded mode)");
+    return json({ ok: true, seq: p.seq, available: false, expiresInMs: ttlMs });
+  }
+
+  await redis.clearBusy(offerId);
+  return json({ ok: true, seq: p.seq, available: true, expiresInMs: 0 });
 }

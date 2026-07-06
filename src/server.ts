@@ -7,7 +7,7 @@ import { addressFromPrivateKey } from "./crypto.ts";
 import type { RouteReq } from "./http.ts";
 import { postProvider, getProvider, listProviders } from "./handlers/providers.ts";
 import { postChallenge, postLaneStart, postLaneSubmit, getAttestation } from "./handlers/attest.ts";
-import { postOffer, getOffer, postTerms, postRevoke } from "./handlers/offers.ts";
+import { postOffer, getOffer, postTerms, postRevoke, postAvailability } from "./handlers/offers.ts";
 import { getOffers, getLiveness } from "./handlers/query.ts";
 import { getHealth, getSpec, getStats } from "./handlers/ops.ts";
 
@@ -64,6 +64,7 @@ export async function startServer(port = config.port): Promise<Server<unknown>> 
       "/v1/offers": { POST: wrap(postOffer as Handler), GET: wrap(getOffers as Handler) },
       "/v1/offers/:offerId": { GET: wrap(getOffer as Handler) },
       "/v1/offers/:offerId/terms": { POST: wrap(postTerms as Handler) },
+      "/v1/offers/:offerId/availability": { POST: wrap(postAvailability as Handler) },
       "/v1/offers/:offerId/revoke": { POST: wrap(postRevoke as Handler) },
 
       "/v1/liveness": { GET: wrap(getLiveness as Handler) },

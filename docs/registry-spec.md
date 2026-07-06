@@ -282,7 +282,7 @@ That work function — a memory-hardness proof: a large seeded DAG built and tra
 
 ## 6. Data objects
 
-Four provider payload types exist, plus the service-signed attestation of §4.3. All provider objects are immutable once accepted; "updates" are new objects that supersede old ones by well-defined rules.
+Five provider payload types exist (the fifth, `avail/v1`, is optional), plus the service-signed attestation of §4.3. All provider objects are immutable once accepted; "updates" are new objects that supersede old ones by well-defined rules.
 
 ### 6.1 ProviderProfile (`type: "profile/v1"`)
 
@@ -362,6 +362,32 @@ Optional explicit withdrawal (normally silence + TTL suffices):
 
 A revoked offer is permanently excluded from results; revocation is durable (Postgres).
 
+### 6.5 Availability (`type: "avail/v1"`) — optional busy hint
+
+The frequently-changing part's companion, and **entirely optional**. When a provider accepts a job off-registry it MAY post `available: false` so the registry hides this offer from default queries (§8.4), sparing requestors a doomed P2P negotiation probe (§9.4) against a machine that is already taken. Stored only in Redis (like DynamicTerms), never in Postgres.
+
+```json
+{
+  "type": "avail/v1",
+  "providerId": "0x…",
+  "offerId": "0x…",
+  "seq": 5012,
+  "available": false,           // false = taken, hide me; true = clear the flag
+  "signedAt": "2026-06-04T08:10:00.000Z",
+  "validUntil": "2026-06-04T09:10:00.000Z"   // busy auto-clears here at the latest
+}
+```
+
+Design and semantics.
+
+- **Advisory, provider-signed, never asserted by the service.** Exactly like liveness (§10), `busy` means only "a provider-signed, unexpired `avail/v1` with `available:false` exists." The registry relays the claim; it never marks an offer busy on its own authority. A requestor still runs its own hire-time probe (§9.4) — this only reorders which candidates are worth probing.
+- **Optional and backward-compatible.** A provider that never posts `avail/v1` is always available, exactly as before this object existed. Providers MAY ignore this mechanism entirely.
+- **Ephemeral and self-healing.** `busy` lives under a Redis TTL bounded by `validUntil`; `validUntil − signedAt ≤ 3600 s`. A provider on a long job re-posts to extend (like heartbeating terms), and one that crashes mid-job reappears automatically when the flag lapses — a stuck-invisible offer is impossible. `available: true` clears the flag early (job finished).
+- **Orthogonal to liveness and to `capacity.coresFree`.** A busy offer is still `active` in the liveness sense (its terms keep heartbeating) and still appears in the liveness snapshot (§8.5); `busy` is a query-time refinement, not a liveness state. It is a coarse whole-machine skip-hint, distinct from the finer-grained `capacity.coresFree` in DynamicTerms (§6.3); a provider MAY use either, both, or neither.
+- **Replay-protected.** `seq` is strictly increasing per offer in its own sequence namespace (independent of the DynamicTerms `seq`); a non-increasing `seq` is rejected with `SEQ_REGRESSION`.
+
+Validation on write: offer exists, not revoked, not expired; signer matches the offer's provider; `available` is a boolean; `seq` a non-negative integer, strictly increasing; `validUntil − signedAt ≤ 3600 s`; for `available:false`, `validUntil` is in the future.
+
 ---
 
 ## 7. Content addressing summary
@@ -372,6 +398,7 @@ A revoked offer is permanently excluded from results; revocation is durable (Pos
 | CapabilityAttestation | `attestationId` = hash of payload | **service** | immutable; expires or is invalidated by re-challenge |
 | OfferTemplate | `offerId` = hash of payload | provider | immutable; expires (own or attestation) or is revoked |
 | DynamicTerms | `(offerId, seq)` | provider | superseded by higher `seq`; expires by `validUntil` |
+| Availability | `(offerId, seq)` | provider | superseded by higher `seq`; expires by `validUntil`; optional |
 | Revocation | hash of payload | provider | immutable |
 
 ---
@@ -430,6 +457,8 @@ Base path `/v1`. All bodies are `application/json`. Provider write endpoints tak
 
 `POST /v1/offers/{offerId}/terms` — submit DynamicTerms (heartbeat). Hot path; target p99 < 15 ms. Writes only to Redis (`SET key value PX freshnessWindow`) and publishes to the offer's channel. Errors: `SIG_MISMATCH`, `UNKNOWN_OFFER`, `SEQ_REGRESSION`, `TERMS_TOO_LONG`.
 
+`POST /v1/offers/{offerId}/availability` — submit an availability hint (`avail/v1`, §6.5). Optional. Writes only to Redis. `available:false` marks the offer busy (hidden from default queries) until `validUntil`; `available:true` clears it. Errors: `SIG_MISMATCH`, `UNKNOWN_OFFER`, `SEQ_REGRESSION`, `REVOKED`, `EXPIRED`, `VALIDATION`.
+
 `POST /v1/offers/{offerId}/revoke` — submit Revocation. Durable.
 
 ### 8.4 Query
@@ -449,11 +478,12 @@ GET /v1/offers?model=cpu/v1
               &score.dagHash.min=2000000
               &price.perHour.max=0.10
               &freshness=strict|normal|any     (default: normal)
+              &availability=free|any            (default: free — hide busy offers, §6.5)
               &sort=price|score.full|score.single|score.ramBandwidth|score.dagHash|random   (default: random)
               &limit=20&cursor=…
 ```
 
-Semantics: numeric fields support `.min`/`.max`; `score.*` filter against the referenced **attestation's proven scores** (the `score.ramBandwidth` / `score.dagHash` filters match only attestations whose respective score is non-null, so until the memory-hard lane is defined they exclude everything — §5.5); `price.perHour` filters against the current DynamicTerms' `minPricePerHour`; `arch` exact-match. `freshness=strict` requires terms newer than 1× the provider's interval, `normal` allows 2× + 30 s grace (§10), `any` includes stale offers (template + attestation only). Default sort is `random` within the result set to avoid herding requestors onto one provider; deterministic pagination uses a cursor over a per-query seed. `sort=score.*` ranks by proven capability.
+Semantics: numeric fields support `.min`/`.max`; `score.*` filter against the referenced **attestation's proven scores** (the `score.ramBandwidth` / `score.dagHash` filters match only attestations whose respective score is non-null, so until the memory-hard lane is defined they exclude everything — §5.5); `price.perHour` filters against the current DynamicTerms' `minPricePerHour`; `arch` exact-match. `freshness=strict` requires terms newer than 1× the provider's interval, `normal` allows 2× + 30 s grace (§10), `any` includes stale offers (template + attestation only). `availability=free` (the default) hides offers a provider has flagged busy (`avail/v1`, §6.5) so requestors don't probe a taken machine; `availability=any` includes them with `status: "busy"`. Default sort is `random` within the result set to avoid herding requestors onto one provider; deterministic pagination uses a cursor over a per-query seed. `sort=score.*` ranks by proven capability.
 
 Response is `{ "items": [ …offer objects… ], "nextCursor": "…" | null }`. Items match `GET /v1/offers/{offerId}`. `nextCursor` is the pagination cursor for the result set (null when exhausted). To stay current afterward, a client polls the liveness snapshot (§8.5). The requestor **must** verify the template and terms provider-signatures and SHOULD verify the attestation service-signature client-side; the reference client treats unverifiable items as absent.
 
@@ -527,8 +557,8 @@ The service also serves a static human-facing dashboard (the built `web/` bundle
 1. Query `GET /v1/offers` with constraints (model, hardware floors, proven-score floors, price ceilings); to stay current, poll the liveness snapshot (§8.5) and re-fetch offers whose liveness changed.
 2. Verify template and terms provider-signatures locally; verify the attestation service-signature; drop failures. Optionally verify the attestation's epoch-inclusion proof (§8.6) for high-value rentals.
 3. Optionally fetch and verify a merkle proof against the latest published root (mandatory once chain anchoring is live).
-4. Select top-N candidates; initiate P2P negotiation with a short timeout (2–5 s). A non-responsive candidate is dropped and the next tried — this hire-time probe, not the registry, is the authoritative liveness and hardware-still-present check.
-5. Agreement formation, activity, and payment proceed entirely off-registry.
+4. Select top-N candidates; initiate P2P negotiation with a short timeout (2–5 s). A non-responsive candidate is dropped and the next tried — this hire-time probe, not the registry, is the authoritative liveness and hardware-still-present check. Default queries already omit offers a provider has flagged busy (§6.5), so the candidate set is pre-filtered of known-taken machines; a provider that does not use that optional signal is simply always offered, and the probe remains the source of truth either way.
+5. Agreement formation, activity, and payment proceed entirely off-registry. On accepting a job a provider MAY post `avail/v1 available:false` (§6.5) to take itself out of default results for the duration, and `available:true` when done.
 
 ---
 
@@ -576,6 +606,7 @@ All counters in Redis, sliding window.
 | Scope | Limit (default) |
 |---|---|
 | Terms submissions, per offer | 1 per `I/2` s, burst 3 |
+| Availability toggles, per offer | 10 / minute |
 | Template submissions, per provider | 20 / hour |
 | Profile updates, per provider | 6 / hour |
 | Benchmark challenges, per provider | 4 / day |
@@ -678,6 +709,8 @@ Price lives in the current DynamicTerms (Redis). `price.perHour` filtering and `
 ```
 terms:{offerId}        → envelope JSON        PX = freshness window   (§10)
 seq:{offerId}          → last accepted seq    no expiry, rebuilt lazily
+busy:{offerId}         → "1" while provider-flagged taken   PX = validUntil   (§6.5, optional)
+availseq:{offerId}     → last accepted avail/v1 seq   no expiry, rebuilt lazily
 bench:{challengeId}    → challenge state + per-lane laneIssuedAt   PX = challenge deadline
 rl:{scope}:{key}       → sliding-window counters
 live:offers            → sorted set of live offerIds scored by validUntil (unix s); powers the §8.5 snapshot and stale sweep
