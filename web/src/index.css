@@ -165,6 +165,29 @@ section.card { display: flex; flex-direction: column; gap: 16px; }
 .card-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; align-items: start; }
 .card .panel .label { margin-bottom: 12px; }
 
+/* ---- stats charts ---- */
+.charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
+@media (max-width: 480px) { .charts-grid { grid-template-columns: 1fr; } }
+.chart-body { position: relative; }
+.chart-body svg { display: block; width: 100%; height: 170px; background: var(--sand); border: 1px solid var(--line); border-radius: var(--r-sm); }
+.chart-body .gridline { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.chart-body .crosshair { stroke: var(--ink-muted); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.chart-y-max, .chart-y-min {
+  position: absolute; right: 6px; font: 500 9.5px var(--font-mono); color: var(--ink-muted);
+  background: color-mix(in srgb, var(--sand) 80%, transparent); padding: 0 3px; border-radius: 3px;
+  pointer-events: none;
+}
+.chart-y-max { top: 4px; }
+.chart-y-min { bottom: 4px; }
+.chart-x { display: flex; justify-content: space-between; font: 500 9.5px var(--font-mono); color: var(--ink-muted); margin-top: 4px; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; margin-bottom: 8px; font: 11px var(--font-mono); }
+.chart-key { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-2); }
+.chart-key b { font-weight: 700; }
+.chart-key .swatch { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+.chart-when { margin-left: auto; color: var(--ink-muted); }
+.range-picker { display: inline-flex; gap: 4px; }
+.range-picker button.on { background: var(--ink); color: var(--sand); border-color: var(--ink); }
+
 /* ---- status pills ---- */
 .pill {
   font-family: var(--font-mono); font-size: 10px; font-weight: 700;

@@ -554,6 +554,21 @@ GET /v1/offers/{offerId}/proof  → { "epoch": 421, "root": "0x…", "index": 17
   "price": { "min": 0.01, "median": 0.05, "max": 0.4 } | null }
 ```
 
+`GET /v1/stats/history?range=1h|6h|24h|7d|30d` (default `24h`) — the same aggregates as a **durable time-series**. The service samples them into a `market_snapshots` row (§14) every `ATLAS_STATS_SAMPLE_MS` (default 60 s; retained `ATLAS_STATS_RETENTION_DAYS`, default 90) and serves each range bucket-averaged to at most a few hundred points, so response size is independent of the sampling rate. Like `/v1/stats`, unsigned server-derived data:
+
+```json
+{ "range": "24h", "stepSec": 600, "unit": "GLM",
+  "points": [ { "at": 1780560000,
+    "providers": { "total": 128, "active": 97, "busy": 12 },
+    "offers": { "active": 412, "live": 388, "busy": 14 },
+    "attestations": { "valid": 120 },
+    "capacity": { "liveCores": 6144, "liveRamGib": 24576 },
+    "price": { "min": 0.01, "median": 0.05, "max": 0.4 } | null,
+    "sim": { "spent": 1.23, "jobs": 456 } | null } ] }
+```
+
+`sim` carries the demand simulator's **cumulative** ledger totals at that time (dev deployments only; null otherwise) — clients difference consecutive points for rates.
+
 Deployments running the dev demand simulator (`ATLAS_DEV_REQUESTORS`, dev only — never production) additionally include a `demandSim` block — per-requestor state with simulated spending, per-dummy-provider earnings, and their totals (ledger-backed, so they survive restarts) — and expose `GET /v1/sim/jobs` (recent settled sim jobs, filterable by `requestor`/`provider`; 404 when the simulator is off). Neither is part of the protocol.
 
 The service also serves a static human-facing dashboard (the built `web/` bundle) on all non-`/v1` paths; this UI is an ordinary API client and not part of the protocol.
@@ -699,6 +714,16 @@ create table offers (
 create index on offers (model, arch, score_full, core_count) where revoked_at is null;
 create index on offers (provider_id);
 create index on offers (expires_at);
+
+create table market_snapshots (           -- market history time-series (§8.7): one row per sampler tick
+  at timestamptz primary key,
+  providers_total int not null, providers_active int not null, providers_busy int not null,
+  offers_active int not null, offers_live int not null, offers_busy int not null,
+  attestations_valid int not null,
+  live_cores int not null, live_ram_gib numeric not null,
+  price_min numeric, price_median numeric, price_max numeric,   -- null when the live set is empty
+  sim_spent numeric, sim_jobs int                               -- dev demand simulator totals; null in production
+);
 
 -- deferred with §11; not created in the first implementation:
 create table epochs (

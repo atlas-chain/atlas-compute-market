@@ -51,11 +51,13 @@ Exercise the full provider flow (register → benchmark → attestation → offe
 PROVIDER_PRIVKEY=0x<32-byte-hex> bun run scripts/bench-client.ts
 ```
 
-Key environment variables: `PORT`, `DATABASE_URL`, `REDIS_URL`, `ATLAS_SERVICE_PRIVKEY`, and benchmark tuning `ATLAS_CHAIN_LEN` / `ATLAS_CHECKPOINTS` / `ATLAS_SAMPLES` (see `src/config.ts`).
+Key environment variables: `PORT`, `DATABASE_URL`, `REDIS_URL`, `ATLAS_SERVICE_PRIVKEY`, benchmark tuning `ATLAS_CHAIN_LEN` / `ATLAS_CHECKPOINTS` / `ATLAS_SAMPLES`, and the market-history sampler `ATLAS_STATS_SAMPLE_MS` / `ATLAS_STATS_RETENTION_DAYS` (see `src/config.ts`).
+
+The registry continuously samples its market aggregates into a durable Postgres time-series (`market_snapshots`, spec §8.7/§14) served by `GET /v1/stats/history?range=1h|6h|24h|7d|30d`; the dashboard's **Stats** page charts it (providers online/busy, offers, cores, RAM, price, and — on sim deployments — settled volume and jobs/hour).
 
 ## Dashboard
 
-`web/` is a Vite + React market dashboard (stats, provider directory with per-provider cards, offer browser) that the registry serves on all non-`/v1` paths when `web/dist` exists; the Docker image builds it in. For frontend development:
+`web/` is a Vite + React market dashboard (stats tiles + a network-statistics chart page, provider directory with per-provider cards, offer browser) that the registry serves on all non-`/v1` paths when `web/dist` exists; the Docker image builds it in. For frontend development:
 
 ```sh
 cd web && bun install

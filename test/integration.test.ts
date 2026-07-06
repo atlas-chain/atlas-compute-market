@@ -135,6 +135,30 @@ describe.skipIf(!docker)("end-to-end provider → requestor flow", () => {
     expect(body.price).toEqual({ min: 0.05, median: 0.05, max: 0.05 });
   });
 
+  test("stats history persists snapshots and serves the bucketed series", async () => {
+    // the sampler took a boot-time snapshot; take another now that the market is live
+    const { takeMarketSnapshot } = await import("../src/stats-history.ts");
+    await takeMarketSnapshot();
+
+    const body = await jsonOf(await fetch(`${BASE}/v1/stats/history?range=1h`));
+    expect(body.range).toBe("1h");
+    expect(body.stepSec).toBe(60);
+    expect(body.points.length).toBeGreaterThanOrEqual(1);
+    const last = body.points[body.points.length - 1];
+    expect(last).toMatchObject({
+      at: expect.any(Number),
+      providers: { total: expect.any(Number), active: expect.any(Number), busy: expect.any(Number) },
+      offers: { active: expect.any(Number), live: expect.any(Number), busy: expect.any(Number) },
+      attestations: { valid: expect.any(Number) },
+      capacity: { liveCores: expect.any(Number), liveRamGib: expect.any(Number) },
+    });
+    expect(last.sim).toBeNull(); // simulator off in this test
+
+    const bad = await fetch(`${BASE}/v1/stats/history?range=1y`);
+    expect(bad.status).toBe(400);
+    expect((await jsonOf(bad)).error.code).toBe("VALIDATION");
+  });
+
   test("query returns the live offer with verifiable envelopes", async () => {
     const res = await fetch(`${BASE}/v1/offers?model=cpu/v1&cores.min=2&score.single.min=1&price.perHour.max=0.10`);
     const body = await jsonOf(res);

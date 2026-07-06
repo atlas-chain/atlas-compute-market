@@ -6,6 +6,7 @@ import { ProviderCard } from "./ProviderCard";
 import { OffersTable } from "./OffersTable";
 import { DemandTable } from "./DemandTable";
 import { RequestorCard } from "./RequestorCard";
+import { StatsPage } from "./StatsPage";
 import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 
 export default function App() {
@@ -28,6 +29,7 @@ export default function App() {
         <nav className="primary-nav" aria-label="Market sections">
           <NavLink to="/providers">Providers</NavLink>
           <NavLink to="/offers">Offers</NavLink>
+          <NavLink to="/stats">Stats</NavLink>
           {stats?.demandSim && <NavLink to="/demand">Demand (sim)</NavLink>}
         </nav>
         <span className="chip" title={commit}>commit {commit.slice(0, 7)}</span>
@@ -47,6 +49,7 @@ export default function App() {
           <Route path="/providers" element={<ProvidersTable />} />
           <Route path="/providers/:id" element={<ProviderCard stats={stats} unit={spec?.unit ?? "GLM"} />} />
           <Route path="/offers" element={<OffersTable unit={spec?.unit ?? "GLM"} />} />
+          <Route path="/stats" element={<StatsPage unit={spec?.unit ?? "GLM"} />} />
           <Route path="/demand" element={<DemandTable demand={stats?.demandSim ?? null} unit={spec?.unit ?? "GLM"} />} />
           <Route path="/requestors/:id" element={<RequestorCard demand={stats?.demandSim ?? null} unit={spec?.unit ?? "GLM"} />} />
           <Route path="*" element={<Navigate to="/providers" replace />} />

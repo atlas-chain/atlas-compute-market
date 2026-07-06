@@ -67,6 +67,29 @@ export async function migrate(): Promise<void> {
   await sql`create index if not exists offers_provider_idx on offers (provider_id)`;
   await sql`create index if not exists offers_expiry_idx on offers (expires_at)`;
 
+  // Market history (§8.7): one row per sampler tick, the durable time-series
+  // behind /v1/stats/history. Unsigned server-derived aggregates, like the
+  // stats blob itself; sim_* columns are null on deployments without the
+  // dev demand simulator.
+  await sql`
+    create table if not exists market_snapshots (
+      at timestamptz primary key,
+      providers_total  int not null,
+      providers_active int not null,
+      providers_busy   int not null,
+      offers_active    int not null,
+      offers_live      int not null,
+      offers_busy      int not null,
+      attestations_valid int not null,
+      live_cores       int not null,
+      live_ram_gib     numeric not null,
+      price_min        numeric,
+      price_median     numeric,
+      price_max        numeric,
+      sim_spent        numeric,
+      sim_jobs         int
+    )`;
+
   // Repair: early builds double-encoded jsonb (a jsonb *string* holding JSON,
   // via `${JSON.stringify(x)}::jsonb`), which broke SQL-side `->>` access.
   await sql`update payload_log set payload = (payload #>> '{}')::jsonb where jsonb_typeof(payload) = 'string'`;

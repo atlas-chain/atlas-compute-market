@@ -168,6 +168,27 @@ export interface Spec {
   serviceKey: string;
 }
 
+/** One bucket-averaged point of the durable market time-series (§8.7). */
+export interface HistoryPoint {
+  at: number; // unix seconds (bucket start)
+  providers: { total: number; active: number; busy: number };
+  offers: { active: number; live: number; busy: number };
+  attestations: { valid: number };
+  capacity: { liveCores: number; liveRamGib: number };
+  price: { min: number; median: number; max: number } | null;
+  /** Cumulative sim ledger totals at that time; null on sim-less deployments. */
+  sim: { spent: number; jobs: number } | null;
+}
+
+export type HistoryRange = "1h" | "6h" | "24h" | "7d" | "30d";
+
+export interface StatsHistory {
+  range: HistoryRange;
+  stepSec: number;
+  unit: string;
+  points: HistoryPoint[];
+}
+
 export interface Health {
   postgres: string;
   redis: string;
@@ -194,6 +215,7 @@ async function get<T>(path: string): Promise<T> {
 
 export const api = {
   stats: () => get<Stats>("/v1/stats"),
+  statsHistory: (range: HistoryRange) => get<StatsHistory>(`/v1/stats/history?range=${range}`),
   spec: () => get<Spec>("/v1/spec"),
   health: () => get<Health>("/v1/health"),
   providers: (limit: number, offset: number) => get<ProviderList>(`/v1/providers?limit=${limit}&offset=${offset}`),

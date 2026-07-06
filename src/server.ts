@@ -10,6 +10,7 @@ import { postChallenge, postLaneStart, postLaneSubmit, getAttestation } from "./
 import { postOffer, getOffer, postTerms, postRevoke, postAvailability } from "./handlers/offers.ts";
 import { getOffers, getLiveness } from "./handlers/query.ts";
 import { getHealth, getSpec, getStats } from "./handlers/ops.ts";
+import { getStatsHistory, startStatsSampler } from "./stats-history.ts";
 
 type Handler = (req: RouteReq, server: Server<unknown>) => Promise<Response>;
 
@@ -81,6 +82,7 @@ export async function startServer(port = config.port): Promise<Server<unknown>> 
       "/v1/health": { GET: wrap(getHealth as Handler) },
       "/v1/spec": { GET: wrap(getSpec as Handler) },
       "/v1/stats": { GET: wrap(getStats as Handler) },
+      "/v1/stats/history": { GET: wrap(getStatsHistory as Handler) },
       ...simRoutes,
     },
     async fetch(req) {
@@ -99,6 +101,10 @@ export async function startServer(port = config.port): Promise<Server<unknown>> 
     const { startDevRequestors } = await import("./dev-requestors.ts");
     await startDevRequestors(config.devRequestors, `http://localhost:${server.port}`);
   }
+
+  // market history sampler — after the sim, so the first snapshot already
+  // carries the reloaded ledger totals
+  startStatsSampler();
   return server;
 }
 

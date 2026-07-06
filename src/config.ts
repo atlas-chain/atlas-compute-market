@@ -44,6 +44,9 @@ export const config = {
 
   livenessTtlMs: num("ATLAS_LIVENESS_TTL_MS", 1000),
   statsTtlMs: num("ATLAS_STATS_TTL_MS", 2000),
+  // market history sampler (§8.7): the durable time-series behind /v1/stats/history
+  statsSampleMs: num("ATLAS_STATS_SAMPLE_MS", 60_000),
+  statsRetentionDays: num("ATLAS_STATS_RETENTION_DAYS", 90),
   queryMaxCandidates: 1000,
   queryDefaultLimit: 20,
   queryMaxLimit: 100,
