@@ -1,0 +1,57 @@
+# Manually triggered: build the provider-agent docker image (agent/) and
+# publish it as a Golem GVMI image via gvmkit-build, pushed anonymously to
+# https://registry.golem.network. The resulting SDK image hash and download
+# link are printed in the job summary.
+name: Build provider GVMI image
+
+on:
+  workflow_dispatch:
+
+env:
+  GVMKIT_BUILD_URL: https://github.com/golemfactory/gvmkit-build-rs/releases/download/v0.3.19/gvmkit-build-x86_64-unknown-linux-gnu.tar.gz
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build docker image
+        run: docker build -t atlas-agent:latest agent/
+
+      - name: Download gvmkit-build
+        run: |
+          curl -sSfL -o gvmkit.tar.gz "$GVMKIT_BUILD_URL"
+          tar xzf gvmkit.tar.gz
+          ./gvmkit-build --help >/dev/null
+
+      - name: Convert to GVMI and push anonymously
+        run: |
+          set -o pipefail
+          ./gvmkit-build atlas-agent:latest --push --nologin | tee gvmkit.log
+
+      - name: Publish image links
+        run: |
+          IMAGE_HASH=$(sed -n 's/.*image link (for use in SDK): *//p' gvmkit.log | tail -1)
+          DOWNLOAD_LINK=$(sed -n 's/.*download link: *//p' gvmkit.log | tail -1)
+          test -n "$IMAGE_HASH" || { echo "no image hash found in gvmkit output"; exit 1; }
+          {
+            echo "## Provider GVMI image"
+            echo ""
+            echo "- **SDK image hash** (use as \`hash:\` in Golem SDK / task definitions):"
+            echo ""
+            echo "  \`$IMAGE_HASH\`"
+            echo ""
+            echo "- **Registry download link:** $DOWNLOAD_LINK"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "image hash: $IMAGE_HASH"
+          echo "download:   $DOWNLOAD_LINK"
+
+      - name: Upload GVMI as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: atlas-agent-gvmi
+          path: |
+            atlas-agent-*.gvmi
+            gvmkit.log
+          if-no-files-found: error

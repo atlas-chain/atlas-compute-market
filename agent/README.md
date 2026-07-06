@@ -65,3 +65,12 @@ Trust model: the relay is as trusted as the network path in HTTP mode —
 every payload is signed inside the container, so a hostile relay can at
 worst deny service or slow the (server-timed) benchmark, never forge
 provider messages.
+
+## GVMI image (Golem registry)
+
+The manually triggered **Build provider GVMI image** GitHub action
+(`.github/workflows/build-gvmi.yml`) builds the docker image, converts it
+with [gvmkit-build](https://github.com/golemfactory/gvmkit-build-rs)
+v0.3.19 and pushes it anonymously to https://registry.golem.network. The
+run's job summary shows the SDK image hash and the registry download link;
+the raw `.gvmi` is also attached as a workflow artifact.
